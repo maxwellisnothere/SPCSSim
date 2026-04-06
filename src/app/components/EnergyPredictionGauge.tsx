@@ -1,4 +1,5 @@
-import { Zap } from 'lucide-react';
+import React from 'react';
+import { Zap, AlertTriangle } from 'lucide-react';
 
 interface EnergyPredictionGaugeProps {
   totalClasses: number;
@@ -6,89 +7,105 @@ interface EnergyPredictionGaugeProps {
 }
 
 export function EnergyPredictionGauge({ totalClasses, estimatedCost }: EnergyPredictionGaugeProps) {
-  const maxCost = 50;
-  const percentage = Math.min((estimatedCost / maxCost) * 100, 100);
-  const efficiency = percentage < 50 ? 'Excellent' : percentage < 75 ? 'Good' : 'High';
-  const efficiencyColor = percentage < 50 ? 'text-lime-400' : percentage < 75 ? 'text-yellow-400' : 'text-orange-400';
+  const maxLoad = 30;
+  const percentage = Math.min((estimatedCost / maxLoad) * 100, 100);
+  const rotation = (percentage * 1.8) - 90; 
+
+  const getStatusColor = () => {
+    if (percentage < 40) return 'text-lime-400';
+    if (percentage < 75) return 'text-yellow-400';
+    return 'text-red-500';
+  };
+
+  const getStatusText = () => {
+    if (percentage < 40) return 'Efficient';
+    if (percentage < 75) return 'Moderate';
+    return 'High Demand';
+  };
+
+  // --- ปรับจูนสัดส่วนใหม่ทั้งหมดเพื่อให้ "วงหนาแต่ไม่ล้น" ---
+  const strokeWidth = 22;      // 1. เพิ่มความหนาให้สะใจตามโจทย์ (จากเดิม 18 -> 22)
+  const svgSize = 160;         // 2. ลดขนาดรวมของ SVG ลงเพื่อให้มีพื้นที่หายใจในกรอบ (จาก 180 -> 160)
+  const center = svgSize / 2;
+  const radius = 55;           // 3. ปรับรัศมีให้เล็กลงเพื่อให้เส้นหนาๆ ไม่ล้นขอบ SVG (จาก 65 -> 55)
+  const circumference = Math.PI * radius; // คำนวณระยะเส้นรอบรูปครึ่งวงกลม
 
   return (
-    <div>
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-lg bg-lime-500/20 flex items-center justify-center">
-          <Zap className="text-lime-400" size={20} />
-        </div>
-        <div>
-          <h3 className="text-white font-semibold">AI Energy Prediction</h3>
-          <p className="text-gray-500 text-xs">Real-time cost analysis</p>
+    <div className="bg-[#151515] p-5 rounded-2xl border border-gray-800 shadow-xl w-full flex flex-col items-center">
+      {/* Header */}
+      <div className="flex justify-between items-center mb-2 w-full">
+        <h3 className="text-white font-bold flex items-center gap-2 text-[11px] uppercase tracking-wider">
+          <Zap size={14} className="text-lime-400" /> Prediction
+        </h3>
+        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full bg-black border border-gray-800 ${getStatusColor()}`}>
+          {getStatusText()}
+        </span>
+      </div>
+
+      {/* Gauge Container - จัดตำแหน่งให้กึ่งกลางพอดี */}
+      <div className="relative flex justify-center items-center h-28 w-full overflow-hidden">
+        <svg 
+          width={svgSize} 
+          height={svgSize} 
+          viewBox={`0 0 ${svgSize} ${svgSize}`}
+          className="absolute -bottom-12" // ดันฐานลงไปเพื่อโชว์แค่ครึ่งวงกลมบน
+        >
+          {/* Background Arc */}
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="none"
+            stroke="#1f2937"
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${circumference} ${circumference}`}
+            strokeLinecap="round"
+            className="rotate-[180deg] origin-center"
+          />
+          {/* Active Arc */}
+          <circle
+            cx={center}
+            cy={center}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={strokeWidth}
+            strokeDasharray={`${circumference} ${circumference}`}
+            strokeDashoffset={circumference - (circumference * (percentage / 100))}
+            strokeLinecap="round"
+            className={`rotate-[180deg] origin-center transition-all duration-1000 ease-out ${getStatusColor()}`}
+          />
+        </svg>
+
+        {/* Needle - ปรับให้สั้นลงเข้ากับรัศมีใหม่ */}
+        <div 
+          className="absolute bottom-4 w-0.5 h-10 bg-white origin-bottom rounded-full transition-transform duration-1000 ease-out shadow-[0_0_8px_rgba(255,255,255,0.3)]"
+          style={{ transform: `rotate(${rotation}deg)`, zIndex: 10 }}
+        >
+          <div className="absolute -bottom-1 -left-1 w-2.5 h-2.5 bg-white rounded-full border border-[#151515] shadow-lg"></div>
         </div>
       </div>
 
-      {/* Gauge */}
-      <div className="mb-6">
-        <div className="relative w-48 h-48 mx-auto">
-          <svg width="192" height="192" viewBox="0 0 192 192" className="transform -rotate-90">
-            {/* Background Circle */}
-            <circle
-              cx="96"
-              cy="96"
-              r="80"
-              fill="none"
-              stroke="#1a1a1a"
-              strokeWidth="16"
-            />
-            {/* Progress Circle */}
-            <circle
-              cx="96"
-              cy="96"
-              r="80"
-              fill="none"
-              stroke="url(#gradient)"
-              strokeWidth="16"
-              strokeDasharray={`${(percentage / 100) * 502.4} 502.4`}
-              strokeLinecap="round"
-              className="transition-all duration-500"
-            />
-            <defs>
-              <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#84cc16" />
-                <stop offset="100%" stopColor="#a3e635" />
-              </linearGradient>
-            </defs>
-          </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <div className="text-4xl font-bold text-white">${estimatedCost.toFixed(1)}</div>
-            <div className="text-gray-400 text-sm">per day</div>
-          </div>
+      {/* Summary Data */}
+      <div className="grid grid-cols-2 gap-2 w-full mt-2 pt-4 border-t border-gray-800">
+        <div className="text-center border-r border-gray-800">
+          <p className="text-gray-500 text-[9px] uppercase font-bold mb-0.5">Classes</p>
+          <p className="text-base font-bold text-white">{totalClasses}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-gray-500 text-[9px] uppercase font-bold mb-0.5">Load</p>
+          <p className={`text-base font-bold ${getStatusColor()}`}>
+            {estimatedCost.toFixed(1)} <span className="text-[9px]">kWh</span>
+          </p>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="space-y-4">
-        <div className="bg-[#1a1a1a] rounded-lg p-4 border border-gray-800">
-          <div className="text-gray-400 text-sm mb-1">Total Classes</div>
-          <div className="text-2xl font-bold text-white">{totalClasses}</div>
+      {percentage > 85 && (
+        <div className="mt-3 w-full p-1.5 bg-red-500/10 border border-red-500/20 rounded-lg flex justify-center items-center gap-2 text-red-400 text-[8px] animate-pulse">
+          <AlertTriangle size={10} />
+          <span className="font-bold uppercase">Peak Demand</span>
         </div>
-
-        <div className="bg-[#1a1a1a] rounded-lg p-4 border border-gray-800">
-          <div className="text-gray-400 text-sm mb-1">Efficiency Rating</div>
-          <div className={`text-2xl font-bold ${efficiencyColor}`}>{efficiency}</div>
-        </div>
-
-        <div className="bg-[#1a1a1a] rounded-lg p-4 border border-gray-800">
-          <div className="text-gray-400 text-sm mb-1">Est. Monthly Cost</div>
-          <div className="text-2xl font-bold text-lime-400">${(estimatedCost * 30).toFixed(0)}</div>
-        </div>
-      </div>
-
-      {/* AI Recommendations */}
-      <div className="mt-6 bg-lime-500/10 border border-lime-500/30 rounded-lg p-4">
-        <div className="text-lime-400 font-semibold text-sm mb-2">💡 AI Recommendations</div>
-        <ul className="text-gray-300 text-xs space-y-1">
-          <li>• Consider consolidating morning classes</li>
-          <li>• Auto-dim lights during lunch hours</li>
-          <li>• Schedule AC pre-cooling at off-peak</li>
-        </ul>
-      </div>
+      )}
     </div>
   );
 }
