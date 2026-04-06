@@ -6,7 +6,8 @@ interface FloorPlanProps {
   simTime: string;
   simDay: string;
   masterSchedule?: TimeSlot[]; 
-  meetingRooms?: any[]; // 💡 รับข้อมูลห้องประชุมมาจาก App.tsx
+  meetingRooms?: any[]; 
+  onRoomClick?: (roomName: string) => void; // 💡 1. เพิ่ม Prop สำหรับรับคำสั่งตอนโดนคลิก
 }
 
 export const FloorPlanDark: React.FC<FloorPlanProps> = ({ 
@@ -14,10 +15,10 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
   simTime, 
   simDay, 
   masterSchedule = [],
-  meetingRooms = [] // ค่าเริ่มต้นเป็น Array ว่าง
+  meetingRooms = [], 
+  onRoomClick // 💡 2. รับค่า onRoomClick มาใช้งาน
 }) => {
 
-  // --- ลอจิกสำหรับห้องเรียน (ชั้น 2, 3) ---
   const getRoomStatus = (roomName: string) => {
     const simHour = simTime.split(':')[0];
     const activeClass = masterSchedule.find(s => {
@@ -29,7 +30,6 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
     return { active: false, mode: 'Standby', subject: '' };
   };
 
-  // --- 💡 ลอจิกสำหรับห้องประชุม (ชั้น 1) ---
   const getMeetingRoomStatus = (roomName: string) => {
     const room = meetingRooms.find(r => r.name === roomName);
     if (!room) return { active: false, user: '' };
@@ -64,7 +64,11 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
     }
 
     return (
-      <div key={roomName} className={`${bgClass} border-2 ${borderClass} ${shadowClass} rounded-2xl p-6 flex flex-col items-center justify-center transition-all duration-1000 h-44`}>
+      <div 
+        key={roomName} 
+        onClick={() => onRoomClick && onRoomClick(roomName)} // 💡 3. สั่งให้ส่งชื่อห้องกลับไปเมื่อถูกคลิก
+        className={`${bgClass} border-2 ${borderClass} ${shadowClass} rounded-2xl p-6 flex flex-col items-center justify-center transition-all duration-1000 h-44 cursor-pointer hover:border-lime-500/80 hover:bg-lime-500/5`} // 💡 4. เพิ่ม cursor-pointer และ effect ตอนเอาเมาส์ชี้
+      >
         <h3 className={`text-lg font-bold ${status.active ? 'text-white' : 'text-gray-500'} mb-2 transition-colors duration-700`}>{roomName}</h3>
         <div className={`text-sm font-medium flex items-center gap-2 ${textClass} transition-colors duration-700`}>
           {status.active && <span className={`w-2.5 h-2.5 rounded-full ${status.mode === 'On-site' ? 'bg-lime-400' : 'bg-indigo-400'} animate-pulse`}></span>}
@@ -103,7 +107,6 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
                </div>
             </div>
 
-            {/* 💡 วาดห้อง Meeting Room โดยวนลูปจากฐานข้อมูลจริง (มี 6 ก็ขึ้น 6) */}
             <div className="grid grid-cols-3 gap-6 w-full mt-2">
                {meetingRooms.length === 0 && (
                  <div className="col-span-3 text-center text-gray-600 text-xs py-4 animate-pulse">

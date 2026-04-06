@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react'; // 💡 นำเข้า useEffect
 import { LayoutDashboard, Layers, Settings, Zap } from 'lucide-react';
 import { DarkEnergyCard } from './components/DarkEnergyCard';
 import { FloorPlanDark } from './components/FloorPlanDark';
@@ -7,18 +7,18 @@ import { RecentActivities } from './components/RecentActivities';
 import { ScheduleModal } from './components/ScheduleModal';
 import MeetingRoomCluster from "./components/MeetingRoomCluster";
 import { SimulationController } from './components/SimulationController';
+import { RoomConfigModal, RoomDeviceState } from './components/RoomConfigModal';
+import { supabase } from '../supabaseClient'; // 💡 เรียกใช้ Supabase
 
-// 1. เพิ่ม id และ room ใน Interface
 export interface TimeSlot {
   id: string; 
   day: string;
   time: string;
-  room: string; // ระบุห้องในนี้
+  room: string;
   mode: 'On-site' | 'Online';
   subject: { code: string; name: string; students: number; };
 }
 
-// 2. กำหนดห้องที่มีอยู่จริงในระบบ (ให้ตรงกับ Floor Plan ชั้น 2 และ 3)
 export const AVAILABLE_CLASSROOMS = [
   'Classroom 101', 'Classroom 102', 'Classroom 103', 
   'Classroom 104', 'Classroom 105', 'Classroom 106',
@@ -30,11 +30,8 @@ export default function App() {
   const [selectedFloor, setSelectedFloor] = useState<'floor1' | 'floor2' | 'floor3'>('floor1');
   const [showScheduleModal, setShowScheduleModal] = useState(false);
 
-  // 3. เปลี่ยน State เป็น Master Schedule พร้อมใส่ Mockup ด้วยชื่อห้องจริง
-  const [masterSchedule, setMasterSchedule] = useState<TimeSlot[]>([
-    { id: '1', day: 'Monday', time: '09:00', room: 'Classroom 101', mode: 'On-site', subject: { code: 'CPE101', name: 'Programming', students: 35 } },
-    { id: '2', day: 'Monday', time: '09:00', room: 'Computer Lab A', mode: 'Online', subject: { code: 'CPE202', name: 'Network', students: 30 } },
-  ]);
+  // 💡 1. ปรับ Master Schedule เป็น Array ว่าง เพื่อรอรับจาก DB
+  const [masterSchedule, setMasterSchedule] = useState<TimeSlot[]>([]);
   const [meetingRooms, setMeetingRooms] = useState<any[]>([]);
 
   const [simDay, setSimDay] = useState<string>('Monday');
@@ -42,17 +39,93 @@ export default function App() {
   const [currentPower, setCurrentPower] = useState<number>(185.2);
   const [simEvents, setSimEvents] = useState<string[]>([]);
 
+  const [powerHistory, setPowerHistory] = useState<number[]>([190, 188, 187, 186, 185, 184.5, 185.2]);
+  const [optHistory, setOptHistory] = useState<number[]>([155, 152, 148, 145, 143, 142, 141.8]);
+  const [savingsHistory, setSavingsHistory] = useState<number[]>([18, 19, 20, 19.5, 21, 22, 23.4]);
+
+  const [editingRoom, setEditingRoom] = useState<string | null>(null);
+  
+  const [roomsConfig, setRoomsConfig] = useState<Record<string, RoomDeviceState>>({
+    'Classroom 101': { occupancy: 25, acOn: true, acTemp: 24, projectorOn: true, lightsOn: true, isAiOptimized: true },
+    'Computer Lab A': { occupancy: 30, acOn: true, acTemp: 23, projectorOn: false, lightsOn: true, isAiOptimized: false },
+  });
+
+  // 💡 2. ดึงข้อมูลจาก DB ทันทีเมื่อเปิดหน้าเว็บ
+  useEffect(() => {
+    fetchSchedules();
+  }, []);
+
+  const fetchSchedules = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('master_schedule')
+        .select('*');
+
+      if (error) throw error;
+      
+      if (data && data.length > 0) {
+        setMasterSchedule(data as TimeSlot[]);
+      } else {
+        // หากไม่มีข้อมูลในฐานข้อมูล ให้ใช้ข้อมูล Mockup ชั่วคราวไปก่อน
+        setMasterSchedule([
+          { id: '1', day: 'Monday', time: '09:00', room: 'Classroom 101', mode: 'On-site', subject: { code: 'CPE101', name: 'Programming', students: 35 } },
+          { id: '2', day: 'Monday', time: '09:00', room: 'Computer Lab A', mode: 'Online', subject: { code: 'CPE202', name: 'Network', students: 30 } },
+        ]);
+      }
+    } catch (error) {
+      console.error('Error fetching schedules:', error);
+    }
+  };
+
+  // 💡 3. ฟังก์ชันเซฟข้อมูลลง Supabase
+  const handleUpdateSchedule = async (newSchedule: TimeSlot[]) => {
+    setMasterSchedule(newSchedule);
+
+    try {
+      // ใช้วิธีลบข้อมูลเก่าทั้งหมดในตารางแล้วเพิ่มใหม่ (แทนการ upsert) เพื่อป้องกันปัญหาตารางเรียนที่ถูกลบไปแล้วยังค้างอยู่ในฐานข้อมูล
+      await supabase.from('master_schedule').delete().neq('id', 'dummy'); 
+      const { error } = await supabase.from('master_schedule').insert(newSchedule);
+
+      if (error) throw error;
+      console.log('✅ บันทึกตารางเรียนลง Database สำเร็จ!');
+    } catch (error) {
+      console.error('❌ เกิดข้อผิดพลาดในการบันทึกตารางเรียน:', error);
+    }
+  };
+
+  const handleSaveRoomConfig = (roomName: string, newState: RoomDeviceState, calculatedPowerKw: number) => {
+    setRoomsConfig(prev => ({
+      ...prev,
+      [roomName]: newState
+    }));
+    setEditingRoom(null);
+    console.log(`ห้อง ${roomName} อัปเดตการกินไฟเป็น: ${calculatedPowerKw.toFixed(2)} kW`);
+  };
+
   const handleSimulationData = (data: { day: string, timeFormatted: string, powerLoad: number, events: string[] }) => {
     setSimDay(data.day);
     setSimTime(data.timeFormatted);
     setCurrentPower(data.powerLoad);
     setSimEvents(data.events);
+
+    const randomFluctuation = (Math.random() * 4) - 2;
+    const newOptimized = (data.powerLoad * 0.76) + randomFluctuation;
+    const newSavings = data.powerLoad > 0 ? (((data.powerLoad - newOptimized) / data.powerLoad) * 100) : 0;
+
+    setPowerHistory(prev => [...prev.slice(1), data.powerLoad]);
+    setOptHistory(prev => [...prev.slice(1), newOptimized]);
+    setSavingsHistory(prev => [...prev.slice(1), newSavings]);
   };
 
+  const optimizedPower = currentPower * 0.76; 
+  const totalSavingsPercentage = currentPower > 0 
+    ? (((currentPower - optimizedPower) / currentPower) * 100).toFixed(1) 
+    : '0.0';
+
   const summaryData = [
-    { title: 'Total Savings', value: '23.4', unit: '%', sparklineData: [18, 19, 20, 19.5, 21, 22, 23.4] },
-    { title: 'Baseline Power', value: '185.2', unit: 'kW', sparklineData: [190, 188, 187, 186, 185, 184.5, 185.2] },
-    { title: 'Optimized Power', value: '141.8', unit: 'kW', sparklineData: [155, 152, 148, 145, 143, 142, 141.8] }
+    { title: 'Total Savings', value: totalSavingsPercentage, unit: '%', sparklineData: savingsHistory },
+    { title: 'Baseline Power', value: currentPower.toFixed(1), unit: 'kW', sparklineData: powerHistory },
+    { title: 'Optimized Power', value: optimizedPower.toFixed(1), unit: 'kW', sparklineData: optHistory }
   ];
 
   const floorOptions = [
@@ -88,7 +161,7 @@ export default function App() {
                 <span className="text-xl text-lime-400/80 uppercase">{simDay}</span> 
                 <span>{simTime} <span className="text-lg text-lime-400/50">น.</span></span>
               </div>
-              <div className="text-gray-400 text-sm mt-1">Live Load: <span className="text-red-400 font-bold text-lg">{currentPower} kW</span></div>
+              <div className="text-gray-400 text-sm mt-1">Live Load: <span className="text-red-400 font-bold text-lg">{currentPower.toFixed(1)} kW</span></div>
             </div>
           </div>
 
@@ -96,7 +169,7 @@ export default function App() {
             {summaryData.map((data, index) => <DarkEnergyCard key={index} {...data} />)}
           </div>
 
-          <div className="mb-6">
+          <div className="mb-6 flex justify-between items-center">
             <div className="inline-flex bg-[#151515] rounded-lg p-1 border border-gray-800">
               {floorOptions.map(floor => (
                 <button key={floor.id} onClick={() => setSelectedFloor(floor.id)} className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${selectedFloor === floor.id ? 'bg-lime-500 text-black' : 'text-gray-400 hover:text-gray-200'}`}>{floor.label}</button>
@@ -104,22 +177,22 @@ export default function App() {
             </div>
           </div>
 
-            <FloorPlanDark 
-              selectedFloor={selectedFloor} 
-              simTime={simTime} 
-              simDay={simDay} 
-              masterSchedule={masterSchedule} 
-              meetingRooms={meetingRooms}  // <-- ตรงนี้สำคัญมากค่ะ
-            />
+          <FloorPlanDark 
+            selectedFloor={selectedFloor} 
+            simTime={simTime} 
+            simDay={simDay} 
+            masterSchedule={masterSchedule} 
+            meetingRooms={meetingRooms}
+            onRoomClick={(roomName) => setEditingRoom(roomName)} 
+          />
           
-                  <div className="mt-8 pt-8 border-t border-gray-800">
+          <div className="mt-8 pt-8 border-t border-gray-800">
             <MeetingRoomCluster 
               currentSimDay={simDay} 
-              onRoomsUpdate={setMeetingRooms} // 💡 เพิ่มบรรทัดนี้
+              onRoomsUpdate={setMeetingRooms}
             />
           </div>
 
-          {/* ปุ่ม Manage Schedule โชว์ทั้งชั้น 2 และชั้น 3 */}
           {(selectedFloor === 'floor2' || selectedFloor === 'floor3') && (
             <div className="mt-6">
               <button onClick={() => setShowScheduleModal(true)} className="w-full bg-lime-500 hover:bg-lime-600 text-black font-semibold py-4 rounded-lg transition-colors flex items-center justify-center gap-2 shadow-lg shadow-lime-500/10">
@@ -146,8 +219,17 @@ export default function App() {
         <ScheduleModal
           schedule={masterSchedule}
           availableRooms={AVAILABLE_CLASSROOMS}
-          onUpdateSchedule={setMasterSchedule}
+          onUpdateSchedule={handleUpdateSchedule} // 💡 4. เปลี่ยนให้มาเรียกใช้ฟังก์ชันเซฟตัวใหม่
           onClose={() => setShowScheduleModal(false)}
+        />
+      )}
+
+      {editingRoom && (
+        <RoomConfigModal 
+          roomName={editingRoom} 
+          initialState={roomsConfig[editingRoom] || { occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, isAiOptimized: true }}
+          onSave={handleSaveRoomConfig}
+          onClose={() => setEditingRoom(null)}
         />
       )}
     </div>

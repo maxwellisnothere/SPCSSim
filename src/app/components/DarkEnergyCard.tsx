@@ -1,4 +1,4 @@
-import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts'; // 💡 1. Import YAxis เพิ่ม
 
 interface DarkEnergyCardProps {
   title: string;
@@ -20,13 +20,15 @@ export function DarkEnergyCard({ title, value, unit, sparklineData }: DarkEnergy
       <div className="h-12 -mx-2">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData}>
+            {/* 💡 2. ใส่ YAxis แบบซ่อน (hide) และเผื่อขอบบน-ล่างให้กราฟ (domain) เพื่อไม่ให้กราฟเด้งสั่น */}
+            <YAxis hide domain={['dataMin - (dataMin * 0.05)', 'dataMax + (dataMax * 0.05)']} />
             <Line
               type="monotone"
               dataKey="value"
               stroke="#84cc16"
               strokeWidth={2}
               dot={false}
-              animationDuration={300}
+              isAnimationActive={false} // 💡 3. ปิดอนิเมชันกราฟเพื่อลดการกระตุกเมื่อข้อมูลเข้ามารัวๆ
             />
           </LineChart>
         </ResponsiveContainer>
