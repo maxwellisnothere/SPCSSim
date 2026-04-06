@@ -8,7 +8,7 @@ interface FloorPlanProps {
   masterSchedule?: TimeSlot[]; 
   meetingRooms?: any[]; 
   onRoomClick?: (roomName: string) => void;
-  liveRoomData?: any[]; // 💡 จุดที่ทำให้ Error หายคือบรรทัดนี้ครับ!
+  liveRoomData?: any[]; 
 }
 
 export const FloorPlanDark: React.FC<FloorPlanProps> = ({ 
@@ -108,14 +108,35 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
         {selectedFloor === 'floor1' && (
           <div className="flex flex-col gap-6 w-full max-w-5xl">
             <div className="grid grid-cols-2 gap-8 w-full">
-               <div className="bg-amber-500/10 border-2 border-amber-500/50 shadow-[0_0_30px_rgba(245,158,11,0.1)] rounded-2xl p-6 flex flex-col items-center justify-center h-44 transition-all duration-1000">
-                 <h3 className="text-lg font-bold text-white mb-2">Cafe (24/7)</h3>
-                 <div className="text-sm font-medium flex items-center gap-2 text-amber-400"><span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>4.5 kW (Active)</div>
-               </div>
-               <div className="bg-[#121212] border-2 border-gray-800 rounded-2xl p-6 flex flex-col items-center justify-center h-44">
-                 <h3 className="text-lg font-bold text-gray-500 mb-2">Student Lounge</h3>
-                 <div className="text-sm font-medium flex items-center gap-2 text-gray-500">1.2 kW (Standby)</div>
-               </div>
+               
+               {(() => {
+                 const cafeData = liveRoomData.find(r => r.room_id === 'Cafe');
+                 const cafeKw = cafeData ? (cafeData.power_consumption_w / 1000).toFixed(2) : "0.00";
+                 return (
+                   <div className="bg-amber-500/10 border-2 border-amber-500/50 shadow-[0_0_30px_rgba(245,158,11,0.1)] rounded-2xl p-6 flex flex-col items-center justify-center h-44 transition-all duration-1000">
+                     <h3 className="text-lg font-bold text-white mb-2">Cafe (24/7)</h3>
+                     <div className="text-sm font-medium flex items-center gap-2 text-amber-400">
+                       <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+                       {cafeKw} kW (Active)
+                     </div>
+                   </div>
+                 );
+               })()}
+
+               {(() => {
+                 const loungeData = liveRoomData.find(r => r.room_id === 'Lounge');
+                 const loungeKw = loungeData ? (loungeData.power_consumption_w / 1000).toFixed(2) : "0.00";
+                 const isActive = parseFloat(loungeKw) > 1.0; 
+                 return (
+                   <div className={`border-2 rounded-2xl p-6 flex flex-col items-center justify-center h-44 transition-all duration-1000 ${isActive ? 'bg-cyan-500/10 border-cyan-500/50 shadow-[0_0_30px_rgba(6,182,212,0.1)]' : 'bg-[#121212] border-gray-800'}`}>
+                     <h3 className={`text-lg font-bold mb-2 ${isActive ? 'text-white' : 'text-gray-500'}`}>Student Lounge</h3>
+                     <div className={`text-sm font-medium flex items-center gap-2 ${isActive ? 'text-cyan-400' : 'text-gray-500'}`}>
+                       {isActive && <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>}
+                       {loungeKw} kW ({isActive ? 'Active' : 'Standby'})
+                     </div>
+                   </div>
+                 );
+               })()}
             </div>
 
             <div className="grid grid-cols-3 gap-6 w-full mt-2">
@@ -126,6 +147,10 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
                )}
                {meetingRooms.map((room) => {
                  const status = getMeetingRoomStatus(room.name);
+                 
+                 const mRoomData = liveRoomData.find(r => r.room_id === room.name);
+                 const mRoomKw = mRoomData ? (mRoomData.power_consumption_w / 1000).toFixed(2) : "0.00";
+
                  return (
                    <div key={room.id} className={`border-2 rounded-2xl p-4 flex flex-col items-center justify-center h-28 relative overflow-hidden transition-all duration-1000 ${
                      status.active ? 'bg-red-500/10 border-red-500/50 shadow-[0_0_20px_rgba(239,68,68,0.15)]' : 'bg-[#121212]/50 border-dashed border-gray-700'
@@ -134,8 +159,8 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
                      <h3 className={`text-sm font-bold mb-1 z-10 ${status.active ? 'text-red-400' : 'text-gray-500'}`}>{room.name}</h3>
                      <div className={`text-[10px] font-medium z-10 flex items-center gap-1 ${status.active ? 'text-red-300' : 'text-gray-600'}`}>
                         {status.active ? (
-                          <><span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse"></span> In Use: {status.user}</>
-                        ) : 'Available (Managed below)'}
+                          <><span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse"></span> {mRoomKw} kW (In Use: {status.user})</>
+                        ) : `${mRoomKw} kW (Standby)`}
                      </div>
                    </div>
                  );
