@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'; // 💡 นำเข้า useEffect
+import { useState, useEffect, useRef } from 'react'; // 💡 เพิ่ม useRef
 import { LayoutDashboard, Layers, Settings, Zap } from 'lucide-react';
 import { DarkEnergyCard } from './components/DarkEnergyCard';
 import { FloorPlanDark } from './components/FloorPlanDark';
@@ -8,7 +8,7 @@ import { ScheduleModal } from './components/ScheduleModal';
 import MeetingRoomCluster from "./components/MeetingRoomCluster";
 import { SimulationController } from './components/SimulationController';
 import { RoomConfigModal, RoomDeviceState } from './components/RoomConfigModal';
-import { supabase } from '../supabaseClient'; // 💡 เรียกใช้ Supabase
+import { supabase } from '../supabaseClient';
 
 export interface TimeSlot {
   id: string; 
@@ -30,102 +30,217 @@ export default function App() {
   const [selectedFloor, setSelectedFloor] = useState<'floor1' | 'floor2' | 'floor3'>('floor1');
   const [showScheduleModal, setShowScheduleModal] = useState(false);
 
-  // 💡 1. ปรับ Master Schedule เป็น Array ว่าง เพื่อรอรับจาก DB
   const [masterSchedule, setMasterSchedule] = useState<TimeSlot[]>([]);
   const [meetingRooms, setMeetingRooms] = useState<any[]>([]);
 
   const [simDay, setSimDay] = useState<string>('Monday');
   const [simTime, setSimTime] = useState<string>('08:00');
-  const [currentPower, setCurrentPower] = useState<number>(185.2);
+  
+  // 💡 แยก State เป็น Baseline และ Optimized 
+  const [currentPower, setCurrentPower] = useState<number>(0); // Optimized (ใช้ไฟจริง)
+  const [baselinePower, setBaselinePower] = useState<number>(0); // Baseline (ถ้าไม่ใช้ AI)
+  const [savingsPercent, setSavingsPercent] = useState<number>(0);
+
   const [simEvents, setSimEvents] = useState<string[]>([]);
 
-  const [powerHistory, setPowerHistory] = useState<number[]>([190, 188, 187, 186, 185, 184.5, 185.2]);
-  const [optHistory, setOptHistory] = useState<number[]>([155, 152, 148, 145, 143, 142, 141.8]);
-  const [savingsHistory, setSavingsHistory] = useState<number[]>([18, 19, 20, 19.5, 21, 22, 23.4]);
+  const [powerHistory, setPowerHistory] = useState<number[]>(new Array(7).fill(0));
+  const [optHistory, setOptHistory] = useState<number[]>(new Array(7).fill(0));
+  const [savingsHistory, setSavingsHistory] = useState<number[]>(new Array(7).fill(0));
 
   const [editingRoom, setEditingRoom] = useState<string | null>(null);
   
+  // 💡 ตัวช่วยป้องกันการยิง Database รัวเกินไป (จะยิงเฉพาะตอนนาทีเปลี่ยน)
+  const lastLoggedTime = useRef<string>('');
+
   const [roomsConfig, setRoomsConfig] = useState<Record<string, RoomDeviceState>>({
-    'Classroom 101': { occupancy: 25, acOn: true, acTemp: 24, projectorOn: true, lightsOn: true, isAiOptimized: true },
-    'Computer Lab A': { occupancy: 30, acOn: true, acTemp: 23, projectorOn: false, lightsOn: true, isAiOptimized: false },
+    'Classroom 101': { occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, isAiOptimized: true },
+    'Computer Lab A': { occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, isAiOptimized: true },
   });
 
-  // 💡 2. ดึงข้อมูลจาก DB ทันทีเมื่อเปิดหน้าเว็บ
+  // 💡 [อัปเกรดลอจิก] คืนค่าทั้ง Baseline, Optimized และ Log ของทุกห้อง
+  const calculateLivePower = (currentDay: string, currentTime: string) => {
+    let totalOptimizedW = 0;
+    let totalBaselineW = 0;
+    const currentHour = currentTime.split(':')[0];
+    const roomLogs: any[] = [];
+
+    // Base Load ตึก 10kW
+    const buildingBaseLoad = 4500 + 1200 + 4300; 
+    totalOptimizedW += buildingBaseLoad;
+    totalBaselineW += buildingBaseLoad;
+
+    AVAILABLE_CLASSROOMS.forEach(roomName => {
+      const activeClass = masterSchedule.find(s => {
+        const classHour = s.time.split(':')[0];
+        return s.room === roomName && s.day === currentDay && classHour === currentHour;
+      });
+
+      const config = roomsConfig[roomName];
+      let optRoomW = 0;
+      let baseRoomW = 0;
+
+      const occupancy = config ? config.occupancy : (activeClass ? activeClass.subject.students : 0);
+      const acOn = config ? config.acOn : !!activeClass;
+      const acTemp = config ? config.acTemp : 24;
+      const lightsOn = config ? config.lightsOn : !!activeClass;
+      const projectorOn = config ? config.projectorOn : (activeClass?.mode === 'On-site');
+      const isAiOptimized = config ? config.isAiOptimized : true;
+
+      // 1. --- คำนวณ Baseline (ถ้าไม่มี AI และลืมปิดไฟแอร์) ---
+      if (activeClass || occupancy > 0 || acOn) {
+         baseRoomW += 3600; // แอร์ทำงาน 100% ตลอด
+         if (lightsOn || activeClass) baseRoomW += 108;
+         if (projectorOn || activeClass) baseRoomW += 300;
+         baseRoomW += occupancy * 51;
+      }
+
+      // 2. --- คำนวณ Optimized (มี AI ปรับลดทอนให้) ---
+      if (activeClass || (config && !config.isAiOptimized) || occupancy > 0) {
+        if (acOn) {
+          let acPwr = 3600;
+          if (isAiOptimized && occupancy === 0) acPwr = 0; // AI ตัดแอร์
+          else acPwr += (25 - acTemp) * 180;
+          optRoomW += acPwr;
+        }
+        if (lightsOn) {
+          let lightPwr = 108;
+          if (isAiOptimized && projectorOn) lightPwr *= 0.5; // AI หรี่ไฟ
+          optRoomW += lightPwr;
+        }
+        if (projectorOn) optRoomW += 300;
+        optRoomW += occupancy * 51;
+      }
+
+      totalOptimizedW += optRoomW;
+      totalBaselineW += baseRoomW;
+
+      // 3. --- เตรียมข้อมูลสำหรับส่งเข้า Database (AI Prediction) ---
+      roomLogs.push({
+        room_id: roomName,
+        day_of_week: currentDay,
+        is_holiday: false,
+        occupancy_count: occupancy,
+        is_class_scheduled: !!activeClass,
+        outside_temp: 33.5, 
+        indoor_temp: (acOn && optRoomW > 0) ? acTemp : 28.0,
+        ac_status: (acOn && optRoomW > 0),
+        ac_setpoint: acTemp,
+        lights_status: (lightsOn && optRoomW > 0),
+        projector_status: (projectorOn && optRoomW > 0),
+        ai_mode_active: isAiOptimized,
+        power_consumption_w: parseFloat(optRoomW.toFixed(2))
+      });
+    });
+
+    return {
+      optimizedKw: totalOptimizedW / 1000,
+      baselineKw: totalBaselineW / 1000,
+      roomLogs
+    };
+  };
+
+  const handleSimulationData = async (data: { day: string, timeFormatted: string, powerLoad: number, events: string[] }) => {
+    setSimDay(data.day);
+    setSimTime(data.timeFormatted);
+    setSimEvents(data.events);
+
+    const { optimizedKw, baselineKw, roomLogs } = calculateLivePower(data.day, data.timeFormatted);
+    
+    // ใส่ค่าแกว่งให้กราฟดูมีชีวิต
+    const randomFluctuation = optimizedKw > 10 ? (Math.random() * 0.5) - 0.25 : 0;
+    const finalOptimizedKw = optimizedKw > 0 ? optimizedKw + randomFluctuation : 0;
+    const finalBaselineKw = baselineKw > 0 ? baselineKw + randomFluctuation + 0.5 : 0;
+
+    const savingsKw = finalBaselineKw - finalOptimizedKw;
+    const savingsPct = finalBaselineKw > 0 ? (savingsKw / finalBaselineKw) * 100 : 0;
+
+    setCurrentPower(finalOptimizedKw);
+    setBaselinePower(finalBaselineKw);
+    setSavingsPercent(savingsPct);
+
+    setPowerHistory(prev => [...prev.slice(1), finalBaselineKw]);
+    setOptHistory(prev => [...prev.slice(1), finalOptimizedKw]);
+    setSavingsHistory(prev => [...prev.slice(1), savingsPct]);
+
+    // 🚀 ยิงข้อมูลเข้า Database เฉพาะตอนที่ "เวลาเดินไป 1 นาที"
+    if (data.timeFormatted !== lastLoggedTime.current) {
+      lastLoggedTime.current = data.timeFormatted;
+      
+      // สร้าง Timestamp หลอก อิงจากเวลาในคอมพิวเตอร์ปัจจุบัน + เวลาในระบบซิม
+      const fakeTimestamp = new Date();
+      const [hours, minutes] = data.timeFormatted.split(':');
+      fakeTimestamp.setHours(parseInt(hours), parseInt(minutes), 0);
+      const isoTime = fakeTimestamp.toISOString();
+
+      try {
+        // 1. ส่งข้อมูลภาพรวม (ให้ Dashboard ภายนอก)
+        await supabase.from('system_energy_logs').insert([{
+          timestamp: isoTime,
+          baseline_power_kw: parseFloat(finalBaselineKw.toFixed(2)),
+          optimized_power_kw: parseFloat(finalOptimizedKw.toFixed(2)),
+          saved_power_kw: parseFloat((savingsKw > 0 ? savingsKw : 0).toFixed(2)),
+          savings_percentage: parseFloat((savingsPct > 0 ? savingsPct : 0).toFixed(2))
+        }]);
+
+        // 2. ส่งข้อมูลรายห้อง (เตรียมไว้เทรน AI)
+        const roomLogsWithTime = roomLogs.map(log => ({ ...log, timestamp: isoTime }));
+        await supabase.from('room_energy_logs').insert(roomLogsWithTime);
+        
+      } catch (error) {
+        console.error("❌ Error logging to Supabase:", error);
+      }
+    }
+  };
+
+  // อัปเดตตัวเลขหน้าจอบางส่วนทันทีที่ผู้ใช้ปรับค่า Modal
+  useEffect(() => {
+    const { optimizedKw, baselineKw } = calculateLivePower(simDay, simTime);
+    setCurrentPower(optimizedKw);
+    setBaselinePower(baselineKw);
+    const savingsPct = baselineKw > 0 ? ((baselineKw - optimizedKw) / baselineKw) * 100 : 0;
+    setSavingsPercent(savingsPct);
+    
+    setPowerHistory(prev => { const arr = [...prev]; arr[arr.length - 1] = baselineKw; return arr; });
+    setOptHistory(prev => { const arr = [...prev]; arr[arr.length - 1] = optimizedKw; return arr; });
+  }, [roomsConfig, masterSchedule]); 
+
+  // --- โค้ดดึงข้อมูล Database ส่วนที่เหลือคงเดิม ---
   useEffect(() => {
     fetchSchedules();
   }, []);
 
   const fetchSchedules = async () => {
     try {
-      const { data, error } = await supabase
-        .from('master_schedule')
-        .select('*');
-
+      const { data, error } = await supabase.from('master_schedule').select('*');
       if (error) throw error;
-      
       if (data && data.length > 0) {
         setMasterSchedule(data as TimeSlot[]);
-      } else {
-        // หากไม่มีข้อมูลในฐานข้อมูล ให้ใช้ข้อมูล Mockup ชั่วคราวไปก่อน
-        setMasterSchedule([
-          { id: '1', day: 'Monday', time: '09:00', room: 'Classroom 101', mode: 'On-site', subject: { code: 'CPE101', name: 'Programming', students: 35 } },
-          { id: '2', day: 'Monday', time: '09:00', room: 'Computer Lab A', mode: 'Online', subject: { code: 'CPE202', name: 'Network', students: 30 } },
-        ]);
       }
     } catch (error) {
       console.error('Error fetching schedules:', error);
     }
   };
 
-  // 💡 3. ฟังก์ชันเซฟข้อมูลลง Supabase
   const handleUpdateSchedule = async (newSchedule: TimeSlot[]) => {
     setMasterSchedule(newSchedule);
-
     try {
-      // ใช้วิธีลบข้อมูลเก่าทั้งหมดในตารางแล้วเพิ่มใหม่ (แทนการ upsert) เพื่อป้องกันปัญหาตารางเรียนที่ถูกลบไปแล้วยังค้างอยู่ในฐานข้อมูล
       await supabase.from('master_schedule').delete().neq('id', 'dummy'); 
       const { error } = await supabase.from('master_schedule').insert(newSchedule);
-
       if (error) throw error;
-      console.log('✅ บันทึกตารางเรียนลง Database สำเร็จ!');
     } catch (error) {
-      console.error('❌ เกิดข้อผิดพลาดในการบันทึกตารางเรียน:', error);
+      console.error('Error updating database:', error);
     }
   };
 
   const handleSaveRoomConfig = (roomName: string, newState: RoomDeviceState, calculatedPowerKw: number) => {
-    setRoomsConfig(prev => ({
-      ...prev,
-      [roomName]: newState
-    }));
+    setRoomsConfig(prev => ({ ...prev, [roomName]: newState }));
     setEditingRoom(null);
-    console.log(`ห้อง ${roomName} อัปเดตการกินไฟเป็น: ${calculatedPowerKw.toFixed(2)} kW`);
   };
-
-  const handleSimulationData = (data: { day: string, timeFormatted: string, powerLoad: number, events: string[] }) => {
-    setSimDay(data.day);
-    setSimTime(data.timeFormatted);
-    setCurrentPower(data.powerLoad);
-    setSimEvents(data.events);
-
-    const randomFluctuation = (Math.random() * 4) - 2;
-    const newOptimized = (data.powerLoad * 0.76) + randomFluctuation;
-    const newSavings = data.powerLoad > 0 ? (((data.powerLoad - newOptimized) / data.powerLoad) * 100) : 0;
-
-    setPowerHistory(prev => [...prev.slice(1), data.powerLoad]);
-    setOptHistory(prev => [...prev.slice(1), newOptimized]);
-    setSavingsHistory(prev => [...prev.slice(1), newSavings]);
-  };
-
-  const optimizedPower = currentPower * 0.76; 
-  const totalSavingsPercentage = currentPower > 0 
-    ? (((currentPower - optimizedPower) / currentPower) * 100).toFixed(1) 
-    : '0.0';
 
   const summaryData = [
-    { title: 'Total Savings', value: totalSavingsPercentage, unit: '%', sparklineData: savingsHistory },
-    { title: 'Baseline Power', value: currentPower.toFixed(1), unit: 'kW', sparklineData: powerHistory },
-    { title: 'Optimized Power', value: optimizedPower.toFixed(1), unit: 'kW', sparklineData: optHistory }
+    { title: 'Total Savings', value: savingsPercent.toFixed(1), unit: '%', sparklineData: savingsHistory },
+    { title: 'Baseline Power', value: baselinePower.toFixed(1), unit: 'kW', sparklineData: powerHistory },
+    { title: 'Optimized Power', value: currentPower.toFixed(1), unit: 'kW', sparklineData: optHistory }
   ];
 
   const floorOptions = [
@@ -219,7 +334,7 @@ export default function App() {
         <ScheduleModal
           schedule={masterSchedule}
           availableRooms={AVAILABLE_CLASSROOMS}
-          onUpdateSchedule={handleUpdateSchedule} // 💡 4. เปลี่ยนให้มาเรียกใช้ฟังก์ชันเซฟตัวใหม่
+          onUpdateSchedule={handleUpdateSchedule}
           onClose={() => setShowScheduleModal(false)}
         />
       )}

@@ -5,7 +5,7 @@ import { TimeSlot } from '../App';
 interface SimulationData {
   day: string;
   timeFormatted: string;
-  powerLoad: number;
+  powerLoad: number; // 💡 คงไว้ไม่ให้ Error แต่เราจะส่ง 0 ไปเพราะ App.tsx คิดเองแล้ว
   events: string[];
 }
 
@@ -17,16 +17,18 @@ interface SimulationControllerProps {
 const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 export const SimulationController: React.FC<SimulationControllerProps> = ({ onSimulationUpdate, masterSchedule }) => {
-  const [simMinutes, setSimMinutes] = useState<number>(480);
+  const [simMinutes, setSimMinutes] = useState<number>(480); // เริ่มที่ 08:00
   const [currentDay, setCurrentDay] = useState<string>('Monday');
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [speed, setSpeed] = useState<number>(1);
 
+  // 1. ระบบนาฬิกาเดินหน้า
   useEffect(() => {
     if (!isPlaying) return;
     const tick = setInterval(() => {
       setSimMinutes(prev => {
         const nextTime = prev + speed;
+        // ถ้าเวลาเกิน 18:00 (1080 นาที) ให้ตัดขึ้นวันใหม่
         if (nextTime >= 1080) {
            setCurrentDay(prevDay => daysOfWeek[(daysOfWeek.indexOf(prevDay) + 1) % daysOfWeek.length]);
            return 480; 
@@ -37,15 +39,15 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
     return () => clearInterval(tick);
   }, [isPlaying, speed]);
 
+  // 2. ตรวจสอบตารางเรียนและสร้าง Log Events
   useEffect(() => {
     const h = Math.floor(simMinutes / 60);
     const m = simMinutes % 60;
     const timeFormatted = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 
-    let baseLoad = 80; 
     let events: string[] = [];
 
-    // 💡 แก้ไขลอจิกเวลา: ดึงเฉพาะ "ชั่วโมง" มาเทียบเหมือนกัน
+    // ดึงเฉพาะ "ชั่วโมง" มาเช็กกับตารางเรียน
     const simHour = timeFormatted.split(':')[0];
     
     const activeClasses = masterSchedule.filter(s => {
@@ -55,25 +57,29 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
 
     activeClasses.forEach(activeClass => {
         if (activeClass.mode === 'On-site') {
-            baseLoad += 180.5; 
             events.push(`🔴 ${activeClass.room}: ${activeClass.subject.code} (On-site)`);
         } else {
-            baseLoad += 25.2; 
             events.push(`🔵 ${activeClass.room}: ${activeClass.subject.code} (Online)`);
         }
     });
 
     if (activeClasses.length === 0) {
       if (simMinutes < 480 || simMinutes > 1080) {
-        baseLoad = 45; events.push('🌙 Night Mode: All classrooms empty');
+        events.push('🌙 Night Mode: All classrooms empty');
       } else {
-        baseLoad = 95; events.push('🟢 Building Status: Idle / Standby Mode');
+        events.push('🟢 Building Status: Idle / Standby Mode');
       }
     } else {
        events.push(`📊 Total Active Classes: ${activeClasses.length}`);
     }
 
-    onSimulationUpdate({ day: currentDay, timeFormatted, powerLoad: Number((baseLoad + (Math.random() * 5)).toFixed(1)), events });
+    // 💡 ส่งข้อมูลกลับไปให้ App.tsx โดยตั้ง powerLoad เป็น 0 ทิ้งไว้เลย
+    onSimulationUpdate({ 
+      day: currentDay, 
+      timeFormatted, 
+      powerLoad: 0, 
+      events 
+    });
 
   }, [simMinutes, currentDay, masterSchedule, onSimulationUpdate]);
 
@@ -85,6 +91,7 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
       </div>
 
       <div className="flex flex-col gap-3">
+        {/* เลือกวัน */}
         <div className="flex items-center gap-2 bg-[#0a0a0a] p-1.5 rounded-lg border border-gray-800">
           <CalendarDays size={14} className="text-gray-500 ml-1" />
           <select value={currentDay} onChange={(e) => setCurrentDay(e.target.value)} disabled={isPlaying} className="bg-transparent text-xs font-bold text-white w-full focus:outline-none disabled:opacity-50">
@@ -92,6 +99,7 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
           </select>
         </div>
 
+        {/* ปุ่ม Play/Pause/Reset */}
         <div className="flex gap-2 items-stretch">
           <button onClick={() => setIsPlaying(!isPlaying)} className={`flex-[2] py-2.5 rounded-lg font-bold flex justify-center items-center gap-2 transition-all active:scale-95 text-xs ${isPlaying ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'bg-lime-500 text-black hover:bg-lime-400 shadow-lg shadow-lime-500/20'}`}>
             {isPlaying ? <><Pause size={14} fill="currentColor" /> Pause</> : <><Play size={14} fill="currentColor" /> Start</>}
@@ -99,6 +107,7 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
           <button onClick={() => { setSimMinutes(480); setIsPlaying(false); }} className="px-3 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded-lg flex items-center justify-center"><RotateCcw size={14} /></button>
         </div>
 
+        {/* ปุ่มปรับความเร็ว (1x, 15x, 60x) */}
         <div className="flex bg-[#0a0a0a] rounded-lg border border-gray-800 p-1 justify-between">
           {[1, 15, 60].map(multiplier => (
             <button key={multiplier} onClick={() => setSpeed(multiplier)} className={`flex-1 py-1.5 text-[10px] font-black rounded-md ${speed === multiplier ? 'bg-gray-700 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}>{multiplier}x</button>
