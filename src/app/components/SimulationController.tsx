@@ -5,7 +5,7 @@ import { TimeSlot } from '../App';
 interface SimulationData {
   day: string;
   timeFormatted: string;
-  powerLoad: number; // 💡 คงไว้ไม่ให้ Error แต่เราจะส่ง 0 ไปเพราะ App.tsx คิดเองแล้ว
+  powerLoad: number;
   events: string[];
 }
 
@@ -73,7 +73,6 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
        events.push(`📊 Total Active Classes: ${activeClasses.length}`);
     }
 
-    // 💡 ส่งข้อมูลกลับไปให้ App.tsx โดยตั้ง powerLoad เป็น 0 ทิ้งไว้เลย
     onSimulationUpdate({ 
       day: currentDay, 
       timeFormatted, 
@@ -81,7 +80,9 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
       events 
     });
 
-  }, [simMinutes, currentDay, masterSchedule, onSimulationUpdate]);
+  // 💡 ลบ onSimulationUpdate ออกจาก array ด้านล่างและปิด warning ไว้เพื่อไม่ให้เกิด Infinite Loop
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simMinutes, currentDay, masterSchedule]);
 
   return (
     <div className="bg-[#151515] border border-gray-800 p-5 rounded-xl w-full shadow-lg">
