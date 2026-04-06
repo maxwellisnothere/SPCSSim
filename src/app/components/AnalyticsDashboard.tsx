@@ -154,26 +154,72 @@ export const AnalyticsDashboard = () => {
     } catch (error) { toast.error('Failed to export'); }
   };
 
-  const handleExportMLDataset = async () => {
-    if (!supabaseNew) return toast.error('Database connection error');
-    try {
-      const toastId = toast.loading('Extracting ML Features...');
-      const { data, error } = await supabaseNew.from('room_energy_logs').select('*').order('timestamp', { ascending: false }).limit(2000);
-      if (error || !data) throw error;
+  // 💡 อัปเกรดฟังก์ชัน Export ML Dataset ใน AnalyticsDashboard.tsx
+const handleExportMLDataset = async () => {
+  if (!supabaseNew) return toast.error('Database connection error');
+  try {
+    const toastId = toast.loading('Extracting Advanced Features for ML...');
+    const { data, error } = await supabaseNew
+      .from('room_energy_logs')
+      .select('*')
+      .order('timestamp', { ascending: false })
+      .limit(5000); // ดึงเยอะหน่อยเพื่อ Dataset ที่ใหญ่พอ
 
-      const headers = ["timestamp", "day_of_week", "room_id", "feature_outside_temp", "feature_indoor_temp", "feature_occupancy", "feature_ac_status", "feature_lights_status", "target_power_w"];
-      const csvRows = data.map(item => [item.timestamp, item.day_of_week, item.room_id, item.outside_temp, item.indoor_temp, item.occupancy_count, item.ac_status ? 1 : 0, item.lights_status ? 1 : 0, item.power_consumption_w]);
-      const csvContent = "\uFEFF" + [headers.join(','), ...csvRows.map(row => row.join(','))].join('\n');
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url; link.download = `ML_Dataset.csv`;
-      link.click();
-      toast.dismiss(toastId);
-      toast.success('Dataset ready for analysis!');
-    } catch (error) { toast.error('Failed to generate dataset'); }
-  };
+    if (error || !data) throw error;
 
+    const headers = [
+      "timestamp", 
+      "day_of_week", 
+      "is_weekend", // 💡 เพิ่มปัจจัยวันหยุด
+      "hour_sin",   // 💡 Cyclical Time
+      "hour_cos",   // 💡 Cyclical Time
+      "room_id", 
+      "outside_temp", 
+      "indoor_temp", 
+      "occupancy_count", 
+      "ac_status", 
+      "target_power_w"
+    ];
+
+    const csvRows = data.map(item => {
+      const date = new Date(item.timestamp);
+      const hour = date.getHours() + (date.getMinutes() / 60);
+      const day = date.getDay();
+      
+      // คำนวณ Sin/Cos สำหรับเวลา
+      const hourSin = Math.sin(2 * Math.PI * hour / 24);
+      const hourCos = Math.cos(2 * Math.PI * hour / 24);
+      const isWeekend = (day === 0 || day === 6) ? 1 : 0;
+
+      return [
+        item.timestamp,
+        item.day_of_week,
+        isWeekend,
+        hourSin.toFixed(4),
+        hourCos.toFixed(4),
+        item.room_id,
+        item.outside_temp || 0,
+        item.indoor_temp || 0,
+        item.occupancy_count || 0,
+        item.ac_status ? 1 : 0,
+        item.power_consumption_w || 0
+      ];
+    });
+
+    const csvContent = "\uFEFF" + [headers.join(','), ...csvRows.map(row => row.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `PHAM_ML_Dataset_Advanced.csv`;
+    link.click();
+    
+    toast.dismiss(toastId);
+    toast.success('ML Dataset with Cyclical Features Ready!');
+  } catch (error) {
+    toast.error('Failed to generate dataset');
+  }
+};
   if (loading) return (
     <div className="h-[60vh] flex flex-col items-center justify-center gap-4 text-lime-400 font-mono">
       <Activity className="animate-spin" size={48} />
