@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { LayoutDashboard, Layers, Settings, Zap, BarChart2, Sun, AlertTriangle } from 'lucide-react'; 
+import { LayoutDashboard, Layers, Settings, Zap, BarChart2, Sun, AlertTriangle, Wrench } from 'lucide-react'; 
 import { Toaster, toast } from 'sonner'; 
 import { DarkEnergyCard } from './components/DarkEnergyCard'; 
 import { FloorPlanDark } from './components/FloorPlanDark'; 
@@ -51,11 +51,15 @@ export default function App() {
   const [editingRoom, setEditingRoom] = useState<string | null>(null);
   const lastLoggedTime = useRef<string>('');
 
-  // 💡 Default State ปรับให้ใช้ isLoggedIn และ authorizedUser
+  const [globalBypass, setGlobalBypass] = useState(false);
+  
+  // 💡 State สำหรับเก็บข้อมูลสดรายห้อง เพื่อส่งต่อให้ Panel และ แผนผัง
+  const [liveRoomData, setLiveRoomData] = useState<any[]>([]);
+
   const [roomsConfig, setRoomsConfig] = useState<Record<string, RoomDeviceState>>({
     'Classroom 101': { 
       occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, 
-      isAiOptimized: true, isLoggedIn: true, maintenanceBypass: false, // จำลองว่าห้องแรกมีคน Login แล้ว
+      isAiOptimized: true, isLoggedIn: true, maintenanceBypass: false,
       authorizedUser: 'Ajarn Admin'
     }
   });
@@ -83,82 +87,87 @@ export default function App() {
         return s.room === roomName && s.day === currentDay && classHour === currentHour;
       });
 
-      const config = roomsConfig[roomName];
+      const config = roomsConfig[roomName] || {} as Partial<RoomDeviceState>;
       let optRoomW = 0;
       let baseRoomW = 0;
 
-      const occupancy = config ? config.occupancy : (activeClass ? activeClass.subject.students : 0);
-      const isAiOptimized = config ? config.isAiOptimized : true;
-      const acOn = config ? config.acOn : !!activeClass;
-      const acTemp = config ? config.acTemp : 24;
-      const lightsOn = config ? config.lightsOn : !!activeClass;
-      const projectorOn = config ? config.projectorOn : (activeClass?.mode === 'On-site');
+      const occupancy = config.occupancy !== undefined ? config.occupancy : (activeClass ? activeClass.subject.students : 0);
+      const isAiOptimized = config.isAiOptimized !== undefined ? config.isAiOptimized : true;
       
-      // 💡 ดึงสถานะ Authentication
-      const isLoggedIn = config?.isLoggedIn ?? false; // เริ่มต้นให้ห้องโดนล็อคไว้
-      const maintenanceBypass = config?.maintenanceBypass ?? false;
-      const isPowerAllowed = maintenanceBypass || isLoggedIn; // ไฟติดเมื่อ Login หรือช่างซ่อม
+      let acIntent = config.acOn !== undefined ? config.acOn : !!activeClass;
+      let lightsIntent = config.lightsOn !== undefined ? config.lightsOn : !!activeClass;
+      let projectorIntent = config.projectorOn !== undefined ? config.projectorOn : (activeClass?.mode === 'On-site');
+      let acTemp = config.acTemp !== undefined ? config.acTemp : 24;
+
+      if (isAiOptimized && occupancy > 0) {
+        acIntent = true;
+        lightsIntent = true;
+        projectorIntent = true;
+        if (occupancy >= 30) acTemp = 23;
+        else if (occupancy >= 15) acTemp = 24;
+        else acTemp = 25;
+      }
+
+      const isLoggedIn = config.isLoggedIn !== undefined ? config.isLoggedIn : !!activeClass; 
+      const maintenanceBypass = config.maintenanceBypass ?? false;
+      const isPowerAllowed = maintenanceBypass || isLoggedIn; 
 
       const tempDelta = Math.max(0, outdoorTemp - acTemp);
       const currentAcLoad = 3600 + (tempDelta * 150); 
 
-      // 1. Baseline
-      if (activeClass || occupancy > 0 || acOn) {
+      if (activeClass || occupancy > 0 || acIntent) {
          baseRoomW += currentAcLoad; 
-         if (lightsOn || activeClass) baseRoomW += 108;
-         if (projectorOn || activeClass) baseRoomW += 300;
+         if (lightsIntent || activeClass) baseRoomW += 108;
+         if (projectorIntent || activeClass) baseRoomW += 300;
          baseRoomW += occupancy * 51;
       }
 
-      // 2. Optimized 
+      let finalAcOn = false;
+      let finalLightsOn = false;
+      let finalProjectorOn = false;
+
       if (isPowerAllowed) {
-        if (activeClass || (config && !config.isAiOptimized) || occupancy > 0) {
-          if (acOn) {
-            let acPwr = currentAcLoad;
-            if (isAiOptimized && occupancy === 0) {
-              acPwr = 0; 
-              if (lastLoggedTime.current !== currentTime) {
-                toast.success(`AI: Closed AC in ${roomName} (Unoccupied)`, {
-                  icon: <Zap className="text-lime-500" size={16} />,
-                  style: { background: '#151515', color: '#fff', border: '1px solid #333' }
-                });
-              }
-            }
-            optRoomW += acPwr;
-          }
+        const aiForceOff = isAiOptimized && occupancy === 0;
+
+        if (maintenanceBypass) {
+          finalAcOn = acIntent;
+          finalLightsOn = lightsIntent;
+          finalProjectorOn = projectorIntent;
+        } else {
+          finalAcOn = acIntent && !aiForceOff;
+          finalLightsOn = lightsIntent && !aiForceOff;
+          finalProjectorOn = projectorIntent && !aiForceOff;
           
-          if (lightsOn) {
-            let lightPwr = 108;
-            if (isAiOptimized && projectorOn) {
-              lightPwr *= 0.5; 
-              if (lastLoggedTime.current !== currentTime) {
-                toast.info(`AI: Dimmed lights in ${roomName} for projector`, {
-                  style: { background: '#151515', color: '#fff', border: '1px solid #333' }
-                });
-              }
-            }
-            optRoomW += lightPwr;
+          if (aiForceOff && (acIntent || lightsIntent) && lastLoggedTime.current !== currentTime) {
+            toast.success(`AI Saved Energy in ${roomName} (Unoccupied)`, {
+              icon: <Zap className="text-lime-500" size={16} />,
+              style: { background: '#151515', color: '#fff', border: '1px solid #333' }
+            });
           }
-          
-          if (projectorOn) optRoomW += 300;
-          optRoomW += occupancy * 51;
         }
       } else {
-        // 🔴 วงจรไฟฟ้าถูกตัดเพราะไม่ได้ Login
-        optRoomW = 0;
-        
-        if ((acOn || lightsOn) && lastLoggedTime.current !== currentTime && occupancy > 0) {
-           toast.error(`Hardware Locked: Please Login to enable power in ${roomName}`, {
+        if ((acIntent || lightsIntent) && lastLoggedTime.current !== currentTime && occupancy > 0) {
+           toast.error(`Hardware Locked: Please Login in ${roomName}`, {
               icon: <AlertTriangle className="text-red-500" size={16} />,
               style: { background: '#151515', color: '#fff', border: '1px solid #ef4444' }
            });
         }
       }
 
+      if (finalAcOn) optRoomW += currentAcLoad;
+      if (finalLightsOn) {
+        if (isAiOptimized && finalProjectorOn && !maintenanceBypass) {
+          optRoomW += (108 * 0.5); 
+        } else {
+          optRoomW += 108;
+        }
+      }
+      if (finalProjectorOn) optRoomW += 300;
+      if (occupancy > 0) optRoomW += occupancy * 51;
+
       totalOptimizedW += optRoomW;
       totalBaselineW += baseRoomW;
 
-      // 💡 อัปเดตข้อมูลบันทึกลงฐานข้อมูล
       roomLogs.push({
         room_id: roomName,
         day_of_week: currentDay,
@@ -166,15 +175,16 @@ export default function App() {
         occupancy_count: occupancy,
         is_class_scheduled: !!activeClass,
         outside_temp: outdoorTemp, 
-        indoor_temp: (acOn && optRoomW > 0) ? acTemp : outdoorTemp - 5,
-        ac_status: (acOn && optRoomW > 0 && isPowerAllowed), 
+        indoor_temp: finalAcOn ? acTemp : outdoorTemp - 2, 
+        ac_status: finalAcOn,
         ac_setpoint: acTemp,
-        lights_status: (lightsOn && optRoomW > 0 && isPowerAllowed),
-        projector_status: (projectorOn && optRoomW > 0 && isPowerAllowed),
+        lights_status: finalLightsOn,
+        projector_status: finalProjectorOn,
         ai_mode_active: isAiOptimized,
         power_consumption_w: parseFloat(optRoomW.toFixed(2)),
+        is_card_inserted: isLoggedIn,
         maintenance_bypass: maintenanceBypass,
-        auth_username: config?.authorizedUser || 'System' 
+        auth_username: config.authorizedUser || 'System' 
       });
     });
 
@@ -188,7 +198,6 @@ export default function App() {
 
     const { optimizedKw, baselineKw, roomLogs } = calculateLivePower(data.day, data.timeFormatted);
     
-    // 💡 แก้ให้ตัวเลขสวิงได้ ไม่แช่แข็งแล้ว (optimizedKw > 0)
     const randomFluctuation = optimizedKw > 0 ? (Math.random() * 0.5) - 0.25 : 0;
     const finalOptimizedKw = optimizedKw > 0 ? optimizedKw + randomFluctuation : 0;
     const finalBaselineKw = baselineKw > 0 ? baselineKw + randomFluctuation + 0.5 : 0;
@@ -213,7 +222,6 @@ export default function App() {
       const isoTime = fakeTimestamp.toISOString();
       const formattedTime = fakeTimestamp.toISOString().replace('T', ' ').substring(0, 19);
 
-      // --- 1. ส่งเข้า Database เก่าของเรา ---
       try {
         await supabase.from('system_energy_logs').insert([{
           timestamp: isoTime,
@@ -229,10 +237,8 @@ export default function App() {
         console.error("❌ Error logging to old Supabase:", error);
       }
 
-      // --- 2. ส่งเข้า Database ใหม่ ---
       try {
         if (supabaseNew) {
-          // 💡 ดึงชื่ออาจารย์ที่กำลัง Login อยู่มาเก็บด้วย (ช่วยป้องกัน INNER JOIN trap)
           const activeTeacher = roomsConfig['Classroom 101']?.authorizedUser || null;
 
           const { data: dbData, error } = await supabaseNew.from('energy_logs').insert([{
@@ -244,12 +250,10 @@ export default function App() {
             energy_saved_pct: parseFloat(savingsPct.toFixed(2)),
             cost_baseline: parseFloat((finalBaselineKw * 4.5).toFixed(2)), 
             cost_ai: parseFloat((finalOptimizedKw * 4.5).toFixed(2))
-          }]).select(); // 💡 ต้องมี .select() เพื่อให้ Supabase คืนค่ากลับมาบอกเรา
+          }]).select(); 
 
-          // 💡 เช็ค Error แบบละเอียด!
           if (error) {
             console.error("🔥 Supabase New Insert Error:", error.message, error.details);
-            toast.error("บันทึกข้อมูลไม่สำเร็จ: " + error.message);
           } else {
             console.log("✅ เข้า Database แล้ว! Data:", dbData); 
           }
@@ -257,15 +261,16 @@ export default function App() {
       } catch (error) {
         console.error("❌ Code Logic Error:", error);
       }
-    } // <-- วงเล็บปิดตรงนี้แหละที่เคยหายไป!
+    }
   };
 
   useEffect(() => {
-    const { optimizedKw, baselineKw } = calculateLivePower(simDay, simTime);
+    const { optimizedKw, baselineKw, roomLogs } = calculateLivePower(simDay, simTime);
     setCurrentPower(optimizedKw);
     setBaselinePower(baselineKw);
     const savingsPct = baselineKw > 0 ? ((baselineKw - optimizedKw) / baselineKw) * 100 : 0;
     setSavingsPercent(savingsPct);
+    setLiveRoomData(roomLogs); // 💡 เก็บ Live Data ไว้ใช้งานต่อ
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomsConfig, masterSchedule, simTime, simDay]); 
 
@@ -285,8 +290,9 @@ export default function App() {
   const handleUpdateSchedule = async (newSchedule: TimeSlot[]) => {
     setMasterSchedule(newSchedule);
     try {
-      await supabase.from('master_schedule').delete().neq('id', 'dummy'); 
-      await supabase.from('master_schedule').insert(newSchedule);
+      if (!supabaseNew) return;
+      await supabaseNew.from('master_schedule').delete().neq('id', 'dummy'); 
+      await supabaseNew.from('master_schedule').insert(newSchedule);
     } catch (error) {
       console.error('Error updating database:', error);
     }
@@ -295,6 +301,34 @@ export default function App() {
   const handleSaveRoomConfig = (roomName: string, newState: RoomDeviceState) => {
     setRoomsConfig(prev => ({ ...prev, [roomName]: newState }));
     setEditingRoom(null);
+  };
+
+  const handleGlobalBypassToggle = () => {
+    const newState = !globalBypass;
+    setGlobalBypass(newState);
+
+    setRoomsConfig(prev => {
+      const updatedConfig = { ...prev };
+      AVAILABLE_CLASSROOMS.forEach(roomName => {
+        const current = updatedConfig[roomName] || {};
+        updatedConfig[roomName] = {
+          ...current,
+          maintenanceBypass: newState,
+          ...(newState ? { acOn: true, lightsOn: true, projectorOn: true, isAiOptimized: false, occupancy: 20 } : {})
+        } as RoomDeviceState;
+      });
+      return updatedConfig;
+    });
+
+    if (newState) {
+      toast.warning('Global Bypass Enabled: ปลดล็อกและจ่ายไฟทุกห้องในอาคารแล้ว', {
+        style: { background: '#151515', color: '#f97316', border: '1px solid #f97316' }
+      });
+    } else {
+      toast.info('Global Bypass Disabled: กลับสู่ระบบอัจฉริยะปกติ', {
+        style: { background: '#151515', color: '#fff', border: '1px solid #333' }
+      });
+    }
   };
 
   const summaryData = [
@@ -367,22 +401,38 @@ export default function App() {
                 {summaryData.map((data, index) => <DarkEnergyCard key={index} {...data} />)}
               </div>
 
-              <div className="mb-6 flex justify-between items-center bg-[#151515] p-1.5 rounded-xl border border-gray-800 w-fit">
-                {['floor1', 'floor2', 'floor3'].map((f) => (
-                  <button 
-                    key={f} 
-                    onClick={() => setSelectedFloor(f as any)} 
-                    className={`px-5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${selectedFloor === f ? 'bg-lime-500 text-black shadow-lg shadow-lime-500/20' : 'text-gray-500 hover:text-gray-300'}`}
-                  >
-                    {f.replace('floor', 'Floor ')}
-                  </button>
-                ))}
+              <div className="mb-6 flex justify-between items-center w-full gap-4">
+                <div className="flex bg-[#151515] p-1.5 rounded-xl border border-gray-800 w-fit gap-1">
+                  {['floor1', 'floor2', 'floor3'].map((f) => (
+                    <button 
+                      key={f} 
+                      onClick={() => setSelectedFloor(f as any)} 
+                      className={`px-5 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all ${selectedFloor === f ? 'bg-lime-500 text-black shadow-lg shadow-lime-500/20' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                      {f.replace('floor', 'Floor ')}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={handleGlobalBypassToggle}
+                  className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all border ${
+                    globalBypass
+                      ? 'bg-orange-500/10 text-orange-400 border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.2)]'
+                      : 'bg-[#151515] text-gray-500 border-gray-800 hover:text-gray-300 hover:bg-gray-800/50'
+                  }`}
+                >
+                  <Wrench size={16} />
+                  {globalBypass ? 'Global Bypass: ON' : 'Global Bypass: OFF'}
+                </button>
               </div>
 
+              {/* 💡 ส่งข้อมูล Live Data ไปให้แผนผังห้อง */}
               <FloorPlanDark 
                 selectedFloor={selectedFloor} simTime={simTime} simDay={simDay} 
                 masterSchedule={masterSchedule} meetingRooms={meetingRooms}
                 onRoomClick={(roomName) => setEditingRoom(roomName)} 
+                liveRoomData={liveRoomData} 
               />
               
               <div className="mt-10 pt-8 border-t border-gray-800/50">
@@ -423,7 +473,8 @@ export default function App() {
                 </div>
               </div>
             )}
-            <EnergyDataPanel selectedFloor={selectedFloor} />
+            {/* 💡 ส่งข้อมูล Live Data ไปให้ Panel ตารางขวามือ */}
+            <EnergyDataPanel selectedFloor={selectedFloor} liveRoomData={liveRoomData} />
             <RecentActivities />
           </div>
         )}
@@ -438,7 +489,7 @@ export default function App() {
       {editingRoom && (
         <RoomConfigModal 
           roomName={editingRoom} 
-          // 💡 ส่งค่า Default เป็น isLoggedIn
+          simTime={simTime} // 💡 ส่งเวลาปัจจุบันไปให้ Modal คำนวณแอร์
           initialState={roomsConfig[editingRoom] || { occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, isAiOptimized: true, isLoggedIn: false, maintenanceBypass: false, authorizedUser: '' }}
           onSave={handleSaveRoomConfig} onClose={() => setEditingRoom(null)}
         />

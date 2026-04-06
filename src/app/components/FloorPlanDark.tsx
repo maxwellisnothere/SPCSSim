@@ -7,7 +7,8 @@ interface FloorPlanProps {
   simDay: string;
   masterSchedule?: TimeSlot[]; 
   meetingRooms?: any[]; 
-  onRoomClick?: (roomName: string) => void; // 💡 1. เพิ่ม Prop สำหรับรับคำสั่งตอนโดนคลิก
+  onRoomClick?: (roomName: string) => void;
+  liveRoomData?: any[]; // 💡 จุดที่ทำให้ Error หายคือบรรทัดนี้ครับ!
 }
 
 export const FloorPlanDark: React.FC<FloorPlanProps> = ({ 
@@ -16,7 +17,8 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
   simDay, 
   masterSchedule = [],
   meetingRooms = [], 
-  onRoomClick // 💡 2. รับค่า onRoomClick มาใช้งาน
+  onRoomClick,
+  liveRoomData = []
 }) => {
 
   const getRoomStatus = (roomName: string) => {
@@ -43,35 +45,45 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
     return { active: false, user: '' };
   };
 
-  const renderRoom = (roomName: string, basePower: number, activePower: number, onlinePower: number) => {
+  const renderRoom = (roomName: string) => {
     const status = getRoomStatus(roomName);
+    
+    const liveData = liveRoomData.find(r => r.room_id === roomName);
+    const displayPowerKw = liveData ? (liveData.power_consumption_w / 1000).toFixed(2) : "0.00";
+
     let bgClass = "bg-[#121212]";
     let borderClass = "border-gray-800";
     let textClass = "text-gray-500";
-    let powerText = `${basePower.toFixed(1)} kW (Standby)`;
+    let powerText = `${displayPowerKw} kW (Standby)`;
     let shadowClass = "";
 
     if (status.active) {
       if (status.mode === 'On-site') {
         bgClass = "bg-lime-500/10 backdrop-blur-sm"; borderClass = "border-lime-500/50";
         shadowClass = "shadow-[0_0_30px_rgba(132,204,22,0.15)]"; textClass = "text-lime-400";
-        powerText = `${activePower.toFixed(1)} kW (On-site: ${status.subject})`;
+        powerText = `${displayPowerKw} kW (On-site: ${status.subject})`;
       } else {
         bgClass = "bg-indigo-500/10 backdrop-blur-sm"; borderClass = "border-indigo-500/50";
         shadowClass = "shadow-[0_0_30px_rgba(99,102,241,0.15)]"; textClass = "text-indigo-400";
-        powerText = `${onlinePower.toFixed(1)} kW (Online: ${status.subject})`;
+        powerText = `${displayPowerKw} kW (Online: ${status.subject})`;
       }
+    } else if (parseFloat(displayPowerKw) > 0) {
+      bgClass = "bg-yellow-500/10 backdrop-blur-sm"; borderClass = "border-yellow-500/50";
+      shadowClass = "shadow-[0_0_30px_rgba(234,179,8,0.15)]"; textClass = "text-yellow-400";
+      powerText = `${displayPowerKw} kW (Manual Override)`;
     }
 
     return (
       <div 
         key={roomName} 
-        onClick={() => onRoomClick && onRoomClick(roomName)} // 💡 3. สั่งให้ส่งชื่อห้องกลับไปเมื่อถูกคลิก
-        className={`${bgClass} border-2 ${borderClass} ${shadowClass} rounded-2xl p-6 flex flex-col items-center justify-center transition-all duration-1000 h-44 cursor-pointer hover:border-lime-500/80 hover:bg-lime-500/5`} // 💡 4. เพิ่ม cursor-pointer และ effect ตอนเอาเมาส์ชี้
+        onClick={() => onRoomClick && onRoomClick(roomName)} 
+        className={`${bgClass} border-2 ${borderClass} ${shadowClass} rounded-2xl p-6 flex flex-col items-center justify-center transition-all duration-1000 h-44 cursor-pointer hover:border-lime-500/80 hover:bg-white/5`}
       >
-        <h3 className={`text-lg font-bold ${status.active ? 'text-white' : 'text-gray-500'} mb-2 transition-colors duration-700`}>{roomName}</h3>
+        <h3 className={`text-lg font-bold ${status.active || parseFloat(displayPowerKw) > 0 ? 'text-white' : 'text-gray-500'} mb-2 transition-colors duration-700`}>{roomName}</h3>
         <div className={`text-sm font-medium flex items-center gap-2 ${textClass} transition-colors duration-700`}>
-          {status.active && <span className={`w-2.5 h-2.5 rounded-full ${status.mode === 'On-site' ? 'bg-lime-400' : 'bg-indigo-400'} animate-pulse`}></span>}
+          {(status.active || parseFloat(displayPowerKw) > 0) && (
+            <span className={`w-2.5 h-2.5 rounded-full ${status.mode === 'On-site' ? 'bg-lime-400' : status.mode === 'Online' ? 'bg-indigo-400' : 'bg-yellow-400'} animate-pulse`}></span>
+          )}
           {powerText}
         </div>
       </div>
@@ -93,7 +105,6 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
 
       <div className="relative z-10 p-12 mt-10 flex-1 flex items-center justify-center w-full">
         
-        {/* --- ชั้น 1 --- */}
         {selectedFloor === 'floor1' && (
           <div className="flex flex-col gap-6 w-full max-w-5xl">
             <div className="grid grid-cols-2 gap-8 w-full">
@@ -133,17 +144,15 @@ export const FloorPlanDark: React.FC<FloorPlanProps> = ({
           </div>
         )}
 
-        {/* --- ชั้น 2 --- */}
         {selectedFloor === 'floor2' && (
           <div className="grid grid-cols-3 gap-6 w-full max-w-5xl">
-            {['Classroom 101', 'Classroom 102', 'Classroom 103', 'Classroom 104', 'Classroom 105', 'Classroom 106'].map(room => renderRoom(room, 0.6, 4.2, 1.2))}
+            {['Classroom 101', 'Classroom 102', 'Classroom 103', 'Classroom 104', 'Classroom 105', 'Classroom 106'].map(room => renderRoom(room))}
           </div>
         )}
 
-        {/* --- ชั้น 3 --- */}
         {selectedFloor === 'floor3' && (
           <div className="grid grid-cols-2 gap-8 w-full max-w-4xl">
-            {['Computer Lab A', 'Computer Lab B', 'Computer Lab C', 'Computer Lab D'].map(room => renderRoom(room, 1.8, 8.5, 3.0))}
+            {['Computer Lab A', 'Computer Lab B', 'Computer Lab C', 'Computer Lab D'].map(room => renderRoom(room))}
           </div>
         )}
       </div>

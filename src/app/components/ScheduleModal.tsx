@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Plus, Search, Laptop, Users, MapPin } from 'lucide-react';
 import { EnergyPredictionGauge } from './EnergyPredictionGauge';
 import { TimeSlot } from '../App';
+import { supabaseNew } from '../../supabaseClient'; // 💡 เพิ่มการนำเข้า supabaseNew
 
 interface ScheduleModalProps {
   schedule: TimeSlot[];
@@ -14,45 +15,70 @@ export function ScheduleModal({ schedule, availableRooms, onUpdateSchedule, onCl
   const [selectedSlot, setSelectedSlot] = useState<{ day: string; time: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMode, setSelectedMode] = useState<'On-site' | 'Online'>('On-site');
-  const [selectedRoom, setSelectedRoom] = useState<string>(''); // เก็บค่าห้องที่เลือกใน Popover
+  const [selectedRoom, setSelectedRoom] = useState<string>(''); 
+
+  // 💡 State สำหรับเก็บวิชาที่ดึงมาจาก Database
+  const [dbSubjects, setDbSubjects] = useState<{code: string, name: string, students: number}[]>([]);
 
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
   const timeSlots = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
 
-  const availableSubjects = [
-    { code: 'CPE101', name: 'Programming', students: 35 },
-    { code: 'CPE202', name: 'Network', students: 30 },
-    { code: 'CPE303', name: 'Database Systems', students: 28 },
-    { code: 'CPE404', name: 'AI Fundamentals', students: 32 },
-  ].filter(sub => sub.code.toLowerCase().includes(searchQuery.toLowerCase()) || sub.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  // 💡 ฟังก์ชันดึงข้อมูลวิชาจากตาราง courses
+  useEffect(() => {
+    const fetchCourses = async () => {
+      if (!supabaseNew) return;
+      
+      const { data, error } = await supabaseNew.from('courses').select('course_code, course_name');
+      
+      if (data && !error && data.length > 0) {
+        // แมปข้อมูลจาก DB เข้ากับรูปแบบที่ UI ต้องการ
+        const mappedCourses = data.map((c: any) => ({
+          code: c.course_code || 'N/A',
+          name: c.course_name || 'Unknown Course',
+          students: 30 // จำลองจำนวนนักศึกษาเป็น 30 คน
+        }));
+        setDbSubjects(mappedCourses);
+      } else {
+        // Fallback: ถ้าตาราง courses ยังว่างเปล่า ให้โชว์ข้อมูลจำลองไปก่อน
+        setDbSubjects([
+          { code: 'CPE101', name: 'Programming', students: 35 },
+          { code: 'CPE202', name: 'Network', students: 30 },
+          { code: 'CPE303', name: 'Database Systems', students: 28 },
+          { code: 'CPE404', name: 'AI Fundamentals', students: 32 },
+        ]);
+      }
+    };
 
-  // ดึงคลาสเรียนทั้งหมดที่อยู่ในวันและเวลานั้น
+    fetchCourses();
+  }, []);
+
+  // ใช้ dbSubjects แทน array เดิม
+  const availableSubjects = dbSubjects.filter(sub => 
+    sub.code.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    sub.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const getClassesInSlot = (day: string, time: string) => schedule.filter(s => s.day === day && s.time === time);
-
-  // หาว่าห้องไหนถูกจองไปแล้วในวัน/เวลานั้นบ้าง (เพื่อนำไป Disable ปุ่ม)
   const getBookedRoomsInSlot = (day: string, time: string) => getClassesInSlot(day, time).map(s => s.room);
 
-  // เปิด Popover เพิ่มคลาส
   const handleOpenAddPopover = (day: string, time: string) => {
     setSelectedSlot({ day, time });
     setSelectedMode('On-site');
-    setSelectedRoom(''); // รีเซ็ตห้อง
+    setSelectedRoom(''); 
     setSearchQuery('');
   };
 
-  // ลบคลาสเฉพาะตัวที่กด
   const handleDeleteClass = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation(); // ป้องกันไม่ให้ทะลุไปคลิกเปิด Popover
+    e.stopPropagation(); 
     if (window.confirm('ลบวิชานี้ออกจากตารางใช่ไหม?')) {
       onUpdateSchedule(schedule.filter(s => s.id !== id));
     }
   };
 
-  // กดยืนยันเพิ่มคลาส
   const handleSubjectSelect = (subject: typeof availableSubjects[0]) => {
     if (selectedSlot && selectedRoom) {
       const newClass: TimeSlot = {
-        id: Math.random().toString(36).substr(2, 9), // สุ่ม ID
+        id: Math.random().toString(36).substr(2, 9), 
         day: selectedSlot.day,
         time: selectedSlot.time,
         room: selectedRoom,
@@ -80,7 +106,7 @@ export function ScheduleModal({ schedule, availableRooms, onUpdateSchedule, onCl
             <button onClick={onClose} className="w-8 h-8 rounded-lg bg-gray-800 hover:bg-red-500/20 hover:text-red-400 text-gray-400 flex items-center justify-center"><X size={16} /></button>
           </div>
 
-          <div className="flex-1 overflow-auto p-4 bg-[#0a0a0a]/50">
+          <div className="flex-1 overflow-auto p-4 bg-[#0a0a0a]/50 custom-scrollbar">
             <div className="min-w-max text-xs">
               <div className="grid grid-cols-6 gap-2">
                 <div className="bg-[#1a1a1a] rounded-lg p-2 text-center uppercase tracking-widest text-gray-500 font-bold border border-gray-800">Time</div>
@@ -98,7 +124,6 @@ export function ScheduleModal({ schedule, availableRooms, onUpdateSchedule, onCl
                              onClick={() => handleOpenAddPopover(day, time)}
                              className={`relative rounded-xl p-1.5 min-h-[80px] border-2 cursor-pointer transition-all flex flex-col gap-1.5 ${isSelected ? 'bg-lime-500/10 border-lime-500/50' : 'bg-[#151515] border-gray-800 hover:border-gray-600'}`}>
                           
-                          {/* ลูปแสดงการ์ดวิชาที่อยู่ในสล็อตเวลานี้ (ถ้ามีหลายห้องก็ซ้อนกัน) */}
                           {classesInSlot.map(cls => {
                             const isOnline = cls.mode === 'Online';
                             return (
@@ -112,7 +137,6 @@ export function ScheduleModal({ schedule, availableRooms, onUpdateSchedule, onCl
                             );
                           })}
 
-                          {/* ปุ่มกดเพิ่ม (แสดงตอน Hover หรือไม่มีคลาสเลย) */}
                           <div className={`flex items-center justify-center h-full transition-opacity ${classesInSlot.length > 0 ? 'opacity-0 hover:opacity-100 py-1' : 'opacity-100'}`}>
                             <Plus size={16} className="text-gray-600" />
                           </div>
@@ -132,13 +156,11 @@ export function ScheduleModal({ schedule, availableRooms, onUpdateSchedule, onCl
                 Add New Class <span className="bg-gray-800 text-[10px] px-2 py-0.5 rounded text-gray-400">{selectedSlot.day} {selectedSlot.time}</span>
               </h3>
 
-              {/* 1. เลือกโหมด */}
               <div className="flex gap-2 mb-3 bg-[#0a0a0a] p-1 rounded-xl border border-gray-800">
                 <button onClick={() => setSelectedMode('On-site')} className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-all ${selectedMode === 'On-site' ? 'bg-lime-500 text-black' : 'text-gray-500'}`}><Users size={12}/> On-site</button>
                 <button onClick={() => setSelectedMode('Online')} className={`flex-1 py-1.5 text-[10px] font-bold rounded-lg flex items-center justify-center gap-1 transition-all ${selectedMode === 'Online' ? 'bg-indigo-500 text-white' : 'text-gray-500'}`}><Laptop size={12}/> Online</button>
               </div>
 
-              {/* 2. เลือกห้อง (ของใหม่!) */}
               <div className="mb-3">
                 <p className="text-[10px] text-gray-400 font-bold mb-1.5 flex items-center gap-1"><MapPin size={10} /> Select Room</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -159,7 +181,6 @@ export function ScheduleModal({ schedule, availableRooms, onUpdateSchedule, onCl
                 </div>
               </div>
 
-              {/* 3. ค้นหาวิชา */}
               <div className="mb-3 relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500" size={14} />
                 <input type="text" placeholder="Search subject..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-[#0a0a0a] border border-gray-800 rounded-xl pl-8 pr-3 py-2 text-xs text-white focus:outline-none focus:border-lime-500/50" />
