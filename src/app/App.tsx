@@ -147,7 +147,6 @@ export default function App() {
         // 🔴 วงจรไฟฟ้าถูกตัดเพราะไม่ได้ Login
         optRoomW = 0;
         
-        // แจ้งเตือนถ้าระบบพยายามจะเปิดไฟแต่ยังไม่ได้ Login
         if ((acOn || lightsOn) && lastLoggedTime.current !== currentTime && occupancy > 0) {
            toast.error(`Hardware Locked: Please Login to enable power in ${roomName}`, {
               icon: <AlertTriangle className="text-red-500" size={16} />,
@@ -174,7 +173,6 @@ export default function App() {
         projector_status: (projectorOn && optRoomW > 0 && isPowerAllowed),
         ai_mode_active: isAiOptimized,
         power_consumption_w: parseFloat(optRoomW.toFixed(2)),
-        // 💡 ส่งข้อมูลสถานะและชื่ออาจารย์ที่ Login (ถ้าไม่ได้ลุย SQL เรื่อง auth_username ให้คอมเมนต์ไว้)
         maintenance_bypass: maintenanceBypass,
         auth_username: config?.authorizedUser || 'System' 
       });
@@ -190,7 +188,8 @@ export default function App() {
 
     const { optimizedKw, baselineKw, roomLogs } = calculateLivePower(data.day, data.timeFormatted);
     
-    const randomFluctuation = optimizedKw > 10 ? (Math.random() * 0.5) - 0.25 : 0;
+    // 💡 แก้ให้ตัวเลขสวิงได้ ไม่แช่แข็งแล้ว (optimizedKw > 0)
+    const randomFluctuation = optimizedKw > 0 ? (Math.random() * 0.5) - 0.25 : 0;
     const finalOptimizedKw = optimizedKw > 0 ? optimizedKw + randomFluctuation : 0;
     const finalBaselineKw = baselineKw > 0 ? baselineKw + randomFluctuation + 0.5 : 0;
 
@@ -233,20 +232,32 @@ export default function App() {
       // --- 2. ส่งเข้า Database ใหม่ ---
       try {
         if (supabaseNew) {
-          await supabaseNew.from('energy_logs').insert([{
+          // 💡 ดึงชื่ออาจารย์ที่กำลัง Login อยู่มาเก็บด้วย (ช่วยป้องกัน INNER JOIN trap)
+          const activeTeacher = roomsConfig['Classroom 101']?.authorizedUser || null;
+
+          const { data: dbData, error } = await supabaseNew.from('energy_logs').insert([{
             timestamp: formattedTime, 
+            teacher_name: activeTeacher !== 'System' ? activeTeacher : null,
             energy_baseline: Math.round(finalBaselineKw * 1000), 
             energy_ai: Math.round(finalOptimizedKw * 1000),
             energy_saved_w: Math.round((savingsKw > 0 ? savingsKw : 0) * 1000),
             energy_saved_pct: parseFloat(savingsPct.toFixed(2)),
             cost_baseline: parseFloat((finalBaselineKw * 4.5).toFixed(2)), 
             cost_ai: parseFloat((finalOptimizedKw * 4.5).toFixed(2))
-          }]);
+          }]).select(); // 💡 ต้องมี .select() เพื่อให้ Supabase คืนค่ากลับมาบอกเรา
+
+          // 💡 เช็ค Error แบบละเอียด!
+          if (error) {
+            console.error("🔥 Supabase New Insert Error:", error.message, error.details);
+            toast.error("บันทึกข้อมูลไม่สำเร็จ: " + error.message);
+          } else {
+            console.log("✅ เข้า Database แล้ว! Data:", dbData); 
+          }
         }
       } catch (error) {
-        console.error("❌ Error logging to NEW Supabase:", error);
+        console.error("❌ Code Logic Error:", error);
       }
-    }
+    } // <-- วงเล็บปิดตรงนี้แหละที่เคยหายไป!
   };
 
   useEffect(() => {
@@ -255,6 +266,7 @@ export default function App() {
     setBaselinePower(baselineKw);
     const savingsPct = baselineKw > 0 ? ((baselineKw - optimizedKw) / baselineKw) * 100 : 0;
     setSavingsPercent(savingsPct);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomsConfig, masterSchedule, simTime, simDay]); 
 
   useEffect(() => {
