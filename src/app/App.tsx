@@ -11,10 +11,19 @@ import { SimulationController } from './components/SimulationController';
 import { RoomConfigModal, RoomDeviceState } from './components/RoomConfigModal'; 
 import { AnalyticsDashboard } from './components/AnalyticsDashboard'; 
 import { NotificationHub } from './components/NotificationHub'; 
-import { supabase, supabaseNew } from '../supabaseClient'; 
+import { supabaseNew } from '../supabaseClient'; 
+
+const TEACHER_MAPPING: Record<string, { name: string; teacher: string }> = {
+  'CPE201': { name: 'Programming Fundamentals', teacher: 'อ.สมชาย' },
+  'CPE495': { name: 'Senior Project', teacher: 'อ.สมชาย' },
+  'MTH101': { name: 'Calculus I', teacher: 'อ.สุดา' },
+  'CPE301': { name: 'Data Structures', teacher: 'อ.วิชัย' },
+  'CPE401': { name: 'AI Fundamentals', teacher: 'อ.นภา' },
+};
 
 export interface TimeSlot {
   id: string; day: string; time: string; room: string; mode: 'On-site' | 'Online';
+  teacher_name?: string; 
   subject: { code: string; name: string; students: number; };
 }
 
@@ -29,7 +38,6 @@ const ALL_SIMULATION_ROOMS = [
 ];
 
 export default function App() {
-  // --- 1. System States ---
   const [activeMenu, setActiveMenu] = useState('overview'); 
   const [selectedFloor, setSelectedFloor] = useState<'floor1' | 'floor2' | 'floor3'>('floor1');
   const [showScheduleModal, setShowScheduleModal] = useState(false);
@@ -37,21 +45,36 @@ export default function App() {
   const [meetingRooms, setMeetingRooms] = useState<any[]>([]);
   const [editingRoom, setEditingRoom] = useState<string | null>(null);
 
-  // --- 2. Simulation States ---
-  const [simDay, setSimDay] = useState<string>('Monday');
-  const [simTime, setSimTime] = useState<string>('08:00');
-  const [currentWeather, setCurrentWeather] = useState<'sunny' | 'heatwave' | 'rainy'>('sunny');
-  const [isRandomOccupancy, setIsRandomOccupancy] = useState(false);
+  // 💡 [SOLVED] ให้ App.tsx อ่านค่าวัน-เวลาจาก localStorage ตั้งแต่ตอนเริ่มโหลดหน้าเว็บครับ!
+  const [simDay, setSimDay] = useState<string>(() => {
+    return localStorage.getItem('pham_sim_day') || 'Monday';
+  });
+  const [simTime, setSimTime] = useState<string>(() => {
+    const savedMinutes = localStorage.getItem('pham_sim_minutes');
+    if (savedMinutes) {
+      const min = parseInt(savedMinutes);
+      const h = Math.floor(min / 60);
+      const m = min % 60;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    return '08:00';
+  });
+  
+  const [currentWeather, setCurrentWeather] = useState<'sunny' | 'heatwave' | 'rainy'>(() => {
+    return (localStorage.getItem('pham_sim_weather') as any) || 'sunny';
+  });
+  const [isRandomOccupancy, setIsRandomOccupancy] = useState<boolean>(() => {
+    return localStorage.getItem('pham_sim_random') === 'true';
+  });
+
   const [anomalies, setAnomalies] = useState<string[]>([]); 
   const [simEvents, setSimEvents] = useState<string[]>([]);
   
-  // Persistence for Room Temperatures
   const [roomTemps, setRoomTemps] = useState<Record<string, number>>(() => {
     const saved = localStorage.getItem('pham_room_temps');
     return saved ? JSON.parse(saved) : {};
   });
 
-  // --- 3. Power Metrics States ---
   const [currentPower, setCurrentPower] = useState<number>(0); 
   const [baselinePower, setBaselinePower] = useState<number>(0); 
   const [savingsPercent, setSavingsPercent] = useState<number>(0);
@@ -60,11 +83,9 @@ export default function App() {
   const [optHistory, setOptHistory] = useState<number[]>(new Array(7).fill(0));
   const [savingsHistory, setSavingsHistory] = useState<number[]>(new Array(7).fill(0));
 
-  // --- 4. Logic Refs ---
   const lastLoggedTime = useRef<string>('');
   const loggedAnomalies = useRef<Set<string>>(new Set());
 
-  // --- 5. Room Configuration ---
   const [globalBypass, setGlobalBypass] = useState(false);
   const [roomsConfig, setRoomsConfig] = useState<Record<string, RoomDeviceState>>({
     'Classroom 101': { 
@@ -73,7 +94,19 @@ export default function App() {
     }
   });
 
-  // --- 6. Helper Functions & Logic ---
+  const syncSimTimeToDatabase = async (day: string, time: string) => {
+    if (!supabaseNew) return;
+    try {
+      const { error } = await supabaseNew
+        .from('simulation_status')
+        .update({ sim_day: day, sim_time: time, updated_at: new Date().toISOString() })
+        .eq('id', 1);
+      if (error) console.error('Error syncing simulation time:', error);
+    } catch (e) {
+      console.error('Exception syncing simulation time:', e);
+    }
+  };
+
   const getOutsideTemp = (time: string) => {
     const hour = parseInt(time.split(':')[0]);
     const baseTemps = [25, 24, 24, 24, 25, 26, 28, 30, 32, 34, 36, 37, 38, 39, 38, 36, 34, 32, 30, 28, 27, 26, 25, 25];
@@ -113,7 +146,6 @@ export default function App() {
 
       const is247 = roomName === 'Cafe' || roomName === 'Lounge';
       const config = roomsConfig[roomName] || {} as Partial<RoomDeviceState>;
-      
       let defOcc = 0;
       if (activeClass) defOcc = activeClass.subject.students;
       else if (isMeetingBooked) defOcc = 5; 
@@ -159,7 +191,8 @@ export default function App() {
       totalOptimizedW += Math.max(0, optW); totalBaselineW += Math.max(0, baseW);
 
       roomLogs.push({
-        room_id: roomName, day_of_week: currentDay, occupancy_count: occupancy, outside_temp: outdoorTemp, indoor_temp: parseFloat(nextTemp.toFixed(2)),
+        room_id: roomName, day_of_week: currentDay, sim_time: currentTime, 
+        occupancy_count: occupancy, outside_temp: outdoorTemp, indoor_temp: parseFloat(nextTemp.toFixed(2)),
         ac_status: finalAc, ac_setpoint: acTemp, lights_status: finalLights, projector_status: finalProj, ai_mode_active: isAiOptimized,
         power_consumption_w: parseFloat(optW.toFixed(2)), auth_username: config.authorizedUser || 'System' 
       });
@@ -168,20 +201,25 @@ export default function App() {
     return { optimizedKw: totalOptimizedW / 1000, baselineKw: totalBaselineW / 1000, roomLogs, newRoomTemps };
   };
 
-  // --- 7. Handlers ---
   const handleSimulationData = async (data: any) => {
-    setSimDay(data.day); setSimTime(data.timeFormatted); setSimEvents(data.events);
+    setSimDay(data.day); 
+    setSimTime(data.timeFormatted); 
+    setSimEvents(data.events);
+    
+    syncSimTimeToDatabase(data.day, data.timeFormatted);
+
     if (data.weather) setCurrentWeather(data.weather);
     if (data.isRandomOccupancy !== undefined) setIsRandomOccupancy(data.isRandomOccupancy);
 
-    // Maintenance Auto-Logging
     if (data.anomalies) {
       setAnomalies(data.anomalies);
-      for (const room of data.anomalies) {
-        if (!loggedAnomalies.current.has(room)) {
-          if (supabaseNew) await supabaseNew.from('maintenance_logs').insert([{ room_id: room, status: 'Pending', severity: 'High' }]);
-          loggedAnomalies.current.add(room);
-          toast.error(`HVAC Maintenance Alert: ${room}`);
+      if (supabaseNew) {
+        for (const room of data.anomalies) {
+          if (!loggedAnomalies.current.has(room)) {
+            await supabaseNew.from('maintenance_logs').insert([{ room_id: room, status: 'Pending', severity: 'High' }]);
+            loggedAnomalies.current.add(room);
+            toast.error(`HVAC Maintenance Alert: ${room}`);
+          }
         }
       }
       loggedAnomalies.current.forEach(room => { if (!data.anomalies.includes(room)) loggedAnomalies.current.delete(room); });
@@ -192,51 +230,61 @@ export default function App() {
 
     const randomF = optimizedKw > 0 ? (Math.random() * 0.4) - 0.2 : 0;
     const finalOpt = Math.max(0, optimizedKw + randomF);
-    const finalBase = Math.max(0, baselineKw + randomF + 0.3);
+    const finalBase = Math.max(0, baselinePower + randomF + 0.3); 
     const savingsKw = Math.max(0, finalBase - finalOpt);
     const savingsPct = finalBase > 0 ? (savingsKw / finalBase) * 100 : 0;
 
     setCurrentPower(finalOpt); setBaselinePower(finalBase); setSavingsPercent(savingsPct);
     setPowerHistory(prev => [...prev.slice(1), finalBase]); setOptHistory(prev => [...prev.slice(1), finalOpt]); setSavingsHistory(prev => [...prev.slice(1), savingsPct]);
 
-    // Data Logging (Once per simulated minute)
     if (data.timeFormatted !== lastLoggedTime.current) {
       lastLoggedTime.current = data.timeFormatted;
       const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      
       if (supabaseNew) {
-        await supabaseNew.from('energy_logs').insert([{
-          timestamp: ts, energy_baseline: Math.round(finalBase * 1000), energy_ai: Math.round(finalOpt * 1000),
-          energy_saved_w: Math.round(savingsKw * 1000), energy_saved_pct: parseFloat(savingsPct.toFixed(2)),
-          cost_baseline: parseFloat((finalBase * 4.5).toFixed(2)), cost_ai: parseFloat((finalOpt * 4.5).toFixed(2)),
-          teacher_name: roomsConfig['Classroom 101']?.authorizedUser || null
-        }]);
-        await supabaseNew.from('room_energy_logs').insert(roomLogs.map(l => ({ ...l, timestamp: ts })));
+        try {
+          const currentClass = masterSchedule.find(s => s.day === data.day && s.time.split(':')[0] === data.timeFormatted.split(':')[0]);
+          await supabaseNew.from('energy_logs').insert([{
+            timestamp: ts, energy_baseline: Math.round(finalBase * 1000), energy_ai: Math.round(finalOpt * 1000),
+            energy_saved_w: Math.round(savingsKw * 1000), energy_saved_pct: parseFloat(savingsPct.toFixed(2)),
+            cost_baseline: parseFloat((finalBase * 4.5).toFixed(2)), cost_ai: parseFloat((finalOpt * 4.5).toFixed(2)),
+            teacher_name: currentClass?.teacher_name || null 
+          }]);
+          await supabaseNew.from('room_energy_logs').insert(roomLogs.map(l => ({ ...l, timestamp: ts })));
+        } catch (err) { console.error(err); }
       }
     }
   };
 
   const handleUpdateSchedule = async (newSchedule: TimeSlot[]) => {
-    setMasterSchedule(newSchedule);
+    const enhancedSchedule = newSchedule.map(slot => ({
+      ...slot,
+      teacher_name: TEACHER_MAPPING[slot.subject.code]?.teacher || 'ไม่ระบุชื่ออาจารย์'
+    }));
+
+    setMasterSchedule(enhancedSchedule);
     if (!supabaseNew) return;
     try {
+      const toastId = toast.loading("Syncing Schedule with Teacher Data...");
       await supabaseNew.from('master_schedule').delete().neq('id', 'dummy'); 
-      await supabaseNew.from('master_schedule').insert(newSchedule);
-      toast.success("Building Schedule Synchronized");
-    } catch (e) { toast.error("Schedule sync failed"); }
+      const { error } = await supabaseNew.from('master_schedule').insert(enhancedSchedule);
+      if (error) throw error;
+      toast.success("Schedule Updated", { id: toastId });
+    } catch (e: any) { toast.error(`Sync failed: ${e.message}`); }
   };
 
   const handleSaveRoomConfig = (roomName: string, newState: RoomDeviceState) => {
     setRoomsConfig(prev => ({ ...prev, [roomName]: newState })); setEditingRoom(null);
   };
 
-  // --- 8. Lifecycle & Persistence ---
   useEffect(() => {
     const fetchS = async () => {
-      const { data } = await supabase.from('master_schedule').select('*');
-      if (data) setMasterSchedule(data as TimeSlot[]);
+      if (!supabaseNew) return;
+      const { data, error } = await supabaseNew.from('master_schedule').select('*');
+      if (!error && data) setMasterSchedule(data as TimeSlot[]);
     };
     fetchS();
-  }, []);
+  }, [showScheduleModal]); 
 
   useEffect(() => {
     localStorage.setItem('pham_room_temps', JSON.stringify(roomTemps));
@@ -244,11 +292,10 @@ export default function App() {
 
   useEffect(() => {
     const { optimizedKw, baselineKw, roomLogs } = calculateLivePower(simDay, simTime);
-    setCurrentPower(optimizedKw); setBaselinePower(baselinePower); setLiveRoomData(roomLogs);
+    setCurrentPower(optimizedKw); setBaselinePower(baselineKw); setLiveRoomData(roomLogs);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomsConfig, masterSchedule, simTime, simDay, anomalies, currentWeather, isRandomOccupancy]); 
 
-  // --- 9. UI Logic ---
   const summaryData = [
     { title: 'Total Savings', value: savingsPercent.toFixed(1), unit: '%', sparklineData: savingsHistory },
     { title: 'Baseline Power', value: baselinePower.toFixed(1), unit: 'kW', sparklineData: powerHistory },
@@ -258,26 +305,16 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0a0a0a] flex font-sans text-gray-100 selection:bg-lime-500/30">
       <Toaster position="bottom-right" richColors /> 
-      
-      {/* Sidebar Nav */}
       <div className="w-20 bg-[#151515] border-r border-gray-800 flex flex-col items-center py-6 z-50">
         <div className="mb-8 w-10 h-10 rounded-lg bg-lime-500 flex items-center justify-center shadow-lg shadow-lime-500/30"><Zap className="w-6 h-6 text-black" /></div>
         <nav className="flex flex-col gap-3 w-full px-2">
-          {[ 
-            { id: 'overview', icon: LayoutDashboard, label: 'Overview' }, 
-            { id: 'analytics', icon: BarChart2, label: 'Analytics' }, 
-            { id: 'notifications', icon: Bell, label: 'Notifications' },
-            { id: 'floors', icon: Layers, label: 'Floors' }, 
-            { id: 'settings', icon: Settings, label: 'Settings' } 
-          ].map(item => (
+          {[ { id: 'overview', icon: LayoutDashboard, label: 'Overview' }, { id: 'analytics', icon: BarChart2, label: 'Analytics' }, { id: 'notifications', icon: Bell, label: 'Notifications' }, { id: 'floors', icon: Layers, label: 'Floors' }, { id: 'settings', icon: Settings, label: 'Settings' } ].map(item => (
             <button key={item.id} onClick={() => setActiveMenu(item.id)} className={`w-full h-12 rounded-xl flex items-center justify-center transition-all ${activeMenu === item.id ? 'bg-lime-500/20 text-lime-400 border border-lime-500/30' : 'text-gray-500 hover:bg-gray-800/50'}`}><item.icon size={22} /></button>
           ))}
         </nav>
       </div>
-
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 p-6 overflow-y-auto custom-scrollbar">
-          {/* Header */}
           <div className="flex justify-between items-end mb-8">
             <div><h1 className="text-3xl font-bold text-white tracking-tight mb-1">{activeMenu === 'analytics' ? 'System Analytics' : activeMenu === 'notifications' ? 'Maintenance Hub' : 'Smart Building Energy'}</h1><p className="text-gray-500 text-sm font-medium">PHAM Management Console</p></div>
             {activeMenu === 'overview' && (
@@ -287,8 +324,6 @@ export default function App() {
               </div>
             )}
           </div>
-
-          {/* Conditional Rendering */}
           {activeMenu === 'overview' ? (
             <div className="animate-in fade-in duration-500">
               <div className="grid grid-cols-3 gap-4 mb-8">{summaryData.map((data, index) => <DarkEnergyCard key={index} {...data} />)}</div>
@@ -297,13 +332,10 @@ export default function App() {
                 <button onClick={() => setGlobalBypass(!globalBypass)} className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black border transition-all ${globalBypass ? 'bg-orange-500/10 text-orange-400 border-orange-500/50' : 'bg-[#151515] text-gray-500 border-gray-800'}`}><Wrench size={16} />{globalBypass ? 'Global Bypass: ON' : 'Global Bypass: OFF'}</button>
               </div>
               <FloorPlanDark selectedFloor={selectedFloor} simTime={simTime} simDay={simDay} masterSchedule={masterSchedule} meetingRooms={meetingRooms} onRoomClick={(roomName) => setEditingRoom(roomName)} liveRoomData={liveRoomData} />
-              
-              {/* Manage Schedule Button (Visible on Floor 2 & 3) */}
               {(selectedFloor === 'floor2' || selectedFloor === 'floor3') && (
                 <div className="mt-8">
                   <button onClick={() => setShowScheduleModal(true)} className="w-full bg-[#1a1a1a] hover:bg-black text-lime-400 border border-lime-500/20 font-bold py-5 rounded-2xl transition-all flex items-center justify-center gap-3 group">
-                    <Layers size={20} className="group-hover:scale-110 transition-transform" /> 
-                    Manage Building Class Schedule
+                    <Layers size={20} className="group-hover:scale-110 transition-transform" /> Manage Building Class Schedule
                   </button>
                 </div>
               )}
@@ -313,8 +345,6 @@ export default function App() {
             : activeMenu === 'notifications' ? ( <NotificationHub /> )
             : ( <div className="flex flex-col items-center justify-center h-[60vh] text-gray-600 font-mono text-sm uppercase">Loading Module...</div> )}
         </div>
-
-        {/* Right Panel (Simulation Controls) */}
         {activeMenu === 'overview' && (
           <div className="w-85 bg-[#151515] border-l border-gray-800 p-6 overflow-y-auto custom-scrollbar flex flex-col gap-6 shadow-[-10px_0_30px_rgba(0,0,0,0.5)]">
             <SimulationController onSimulationUpdate={handleSimulationData} masterSchedule={masterSchedule} />
@@ -329,8 +359,6 @@ export default function App() {
           </div>
         )}
       </div>
-
-      {/* Modals */}
       {showScheduleModal && ( <ScheduleModal schedule={masterSchedule} availableRooms={AVAILABLE_CLASSROOMS} onUpdateSchedule={handleUpdateSchedule} onClose={() => setShowScheduleModal(false)} /> )}
       {editingRoom && ( <RoomConfigModal roomName={editingRoom} simTime={simTime} initialState={roomsConfig[editingRoom] || { occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, isAiOptimized: true, isLoggedIn: false, maintenanceBypass: false, authorizedUser: '' }} onSave={handleSaveRoomConfig} onClose={() => setEditingRoom(null)} /> )}
     </div>

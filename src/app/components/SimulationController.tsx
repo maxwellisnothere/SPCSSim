@@ -22,70 +22,64 @@ interface SimulationControllerProps {
 const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 export const SimulationController: React.FC<SimulationControllerProps> = ({ onSimulationUpdate, masterSchedule }) => {
-  // 1. Load Initial State from LocalStorage
-  const [simMinutes, setSimMinutes] = useState<number>(() => {
-    const saved = localStorage.getItem('pham_sim_minutes');
-    return saved ? parseInt(saved) : 480;
-  });
+  // 💡 โล๊ะ LocalStorage ทิ้งทั้งหมด ใช้ค่า Default เป็น 08:00 ชั่วคราวก่อนดึง DB
+  const [simMinutes, setSimMinutes] = useState<number>(480);
+  const [currentDay, setCurrentDay] = useState<string>('Monday');
   
-  const [currentDay, setCurrentDay] = useState<string>(() => {
-    return localStorage.getItem('pham_sim_day') || 'Monday';
-  });
+  // 🎯 หัวใจหลักของการแก้บั๊ก: ตัวดักจับว่าโหลด Database เสร็จหรือยัง
+  const [isLoaded, setIsLoaded] = useState(false); 
 
-  const [weather, setWeather] = useState<'sunny' | 'heatwave' | 'rainy'>(() => {
-    return (localStorage.getItem('pham_sim_weather') as any) || 'sunny';
-  });
-
-  const [isRandomOccupancy, setIsRandomOccupancy] = useState<boolean>(() => {
-    return localStorage.getItem('pham_sim_random') === 'true';
-  });
-
+  const [weather, setWeather] = useState<'sunny' | 'heatwave' | 'rainy'>('sunny');
+  const [isRandomOccupancy, setIsRandomOccupancy] = useState<boolean>(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [speed, setSpeed] = useState<number>(1);
-  const [isAnomalyMode, setIsAnomalyMode] = useState(false); // 💡 กลับมาแล้ว!
+  const [isAnomalyMode, setIsAnomalyMode] = useState(false);
   const [brokenRooms, setBrokenRooms] = useState<string[]>([]);
 
-  // Sync with DB on Load
+  // 1. ดึงเวลาจำลองจาก Database (simulation_status) ตอนเปิดเว็บ
   const syncWithDatabase = async () => {
-    if (!supabaseNew) return;
+    if (!supabaseNew) {
+      setIsLoaded(true);
+      return;
+    }
     try {
       const { data, error } = await supabaseNew
-        .from('room_energy_logs')
-        .select('timestamp, day_of_week')
-        .order('timestamp', { ascending: false })
+        .from('simulation_status') // ดึงจากตารางสถานะ
+        .select('sim_day, sim_time')
+        .eq('id', 1)
         .limit(1);
 
       if (data && data.length > 0 && !error) {
         const lastLog = data[0];
-        const lastDate = new Date(lastLog.timestamp);
-        const totalMinutes = (lastDate.getHours() * 60) + lastDate.getMinutes();
-        setSimMinutes(totalMinutes + 1);
-        setCurrentDay(lastLog.day_of_week || 'Monday');
+        setCurrentDay(lastLog.sim_day || 'Monday');
+        
+        // แปลงเวลา (เช่น "08:45") กลับเป็นจำนวนนาทีเพื่อให้ Controller วิ่งต่อได้
+        if (lastLog.sim_time) {
+            const [h, m] = lastLog.sim_time.split(':').map(Number);
+            setSimMinutes((h * 60) + m);
+        }
       }
-    } catch (err) { console.error("Sync Error:", err); }
+    } catch (err) { 
+      console.error("Sync Error:", err); 
+    } finally {
+      // 💡 โหลดเสร็จแล้ว ปลดล็อคให้ระบบทำงานต่อได้
+      setIsLoaded(true); 
+    }
   };
 
   useEffect(() => {
     syncWithDatabase();
   }, []);
 
-  // Save to LocalStorage
-  useEffect(() => {
-    localStorage.setItem('pham_sim_minutes', simMinutes.toString());
-    localStorage.setItem('pham_sim_day', currentDay);
-    localStorage.setItem('pham_sim_weather', weather);
-    localStorage.setItem('pham_sim_random', isRandomOccupancy.toString());
-  }, [simMinutes, currentDay, weather, isRandomOccupancy]);
-
-  // Ticker
+  // 2. นาฬิกาจำลอง
   useEffect(() => {
     if (!isPlaying) return;
     const tick = setInterval(() => {
       setSimMinutes(prev => {
         const nextTime = prev + speed;
-        if (nextTime >= 1080) {
+        if (nextTime >= 1080) { // หมดวันเวลา 18:00
            setCurrentDay(prevDay => daysOfWeek[(daysOfWeek.indexOf(prevDay) + 1) % daysOfWeek.length]);
-           return 480; 
+           return 480; // รีเซ็ตกลับไป 08:00
         }
         return nextTime;
       });
@@ -93,8 +87,11 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
     return () => clearInterval(tick);
   }, [isPlaying, speed]);
 
-  // Logic & Events
+  // 3. แจ้งเวลาให้ App.tsx ทราบ
   useEffect(() => {
+    // 🛑 หยุด! ห้ามส่งค่ากลับไปเซฟทับ Database ถ้ายังดึงเวลาเริ่มต้นไม่เสร็จ!
+    if (!isLoaded) return; 
+
     const h = Math.floor(simMinutes / 60);
     const m = simMinutes % 60;
     const timeFormatted = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
@@ -116,15 +113,15 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
     if (brokenRooms.length > 0) brokenRooms.forEach(r => events.push(`⚠️ ALERT: ${r} HVAC Failure`));
     if (isRandomOccupancy) events.push('🎲 Mode: Random Occupancy');
 
+    // ✅ ปลอดภัยแล้ว ส่งให้ App.tsx รับไปจัดการต่อได้เลย
     onSimulationUpdate({ 
       day: currentDay, timeFormatted, powerLoad: 0, events,
       anomalies: brokenRooms, weather, isRandomOccupancy 
     });
-  }, [simMinutes, currentDay, weather, isRandomOccupancy, brokenRooms, isAnomalyMode]);
+  }, [simMinutes, currentDay, weather, isRandomOccupancy, brokenRooms, isAnomalyMode, isLoaded]);
 
   const handleHardReset = () => {
     if (window.confirm("Hard Reset Simulation?")) {
-      localStorage.clear();
       window.location.reload();
     }
   };
@@ -132,6 +129,7 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
   const handleClearDatabase = async () => {
     if (window.confirm("ลบประวัติการใช้ไฟใน DB ทั้งหมด?")) {
       await supabaseNew?.from('energy_logs').delete().neq('timestamp', 'dummy');
+      await supabaseNew?.from('room_energy_logs').delete().neq('timestamp', 'dummy');
       toast.success("Database Cleaned!");
       setTimeout(() => window.location.reload(), 1000);
     }
@@ -152,7 +150,6 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
       </div>
 
       <div className="space-y-4">
-        {/* Time Display */}
         <div className="grid grid-cols-2 gap-2 text-white font-bold text-[11px]">
           <div className="bg-black/40 p-2 rounded-xl border border-gray-800 flex items-center gap-2">
             <CalendarDays size={14} className="text-lime-500" /> {currentDay}
@@ -162,17 +159,14 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
           </div>
         </div>
 
-        {/* Scrubber */}
         <input type="range" min={480} max={1079} value={simMinutes} onChange={(e) => setSimMinutes(parseInt(e.target.value))} className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-lime-500" />
 
-        {/* Weather */}
         <div className="flex bg-black/40 p-1 rounded-xl border border-gray-800">
           {(['sunny', 'heatwave', 'rainy'] as const).map(w => (
             <button key={w} onClick={() => setWeather(w)} className={`flex-1 py-1.5 text-[9px] font-black rounded-lg transition-all ${weather === w ? 'bg-gray-700 text-white shadow-lg' : 'text-gray-500'}`}>{w.toUpperCase()}</button>
           ))}
         </div>
 
-        {/* Playback & Random Mode */}
         <div className="flex gap-2">
           <button onClick={() => setIsPlaying(!isPlaying)} className={`flex-1 py-3 rounded-xl font-black text-[10px] uppercase transition-all ${isPlaying ? 'bg-red-500/10 text-red-400 border border-red-500/30' : 'bg-lime-500 text-black shadow-xl'}`}>
             {isPlaying ? 'Stop' : 'Run'}
@@ -183,7 +177,6 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
           <button onClick={handleHardReset} className="px-4 bg-gray-800 text-gray-400 rounded-xl border border-gray-700 flex items-center justify-center transition-colors"><RotateCcw size={14} /></button>
         </div>
 
-        {/* 💡 Speed, Bug (Anomaly), and Trash */}
         <div className="flex items-center gap-2">
            <div className="flex flex-1 bg-black/40 rounded-xl border border-gray-800 p-1">
               {[1, 15, 60].map(m => (
@@ -191,7 +184,6 @@ export const SimulationController: React.FC<SimulationControllerProps> = ({ onSi
               ))}
            </div>
            
-           {/* 💡 ปุ่มรูปแมลง กลับมาประจำการแล้ว! */}
            <button 
              onClick={() => setIsAnomalyMode(!isAnomalyMode)} 
              className={`p-2.5 rounded-xl border transition-all ${isAnomalyMode ? 'bg-red-500/20 border-red-500/50 text-red-500 animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.2)]' : 'bg-black/40 border-gray-800 text-gray-500 hover:text-gray-400'}`}
