@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Users, Wind, Monitor, Lightbulb, Zap, Cpu, Wrench, Lock, UserCircle, Mail, Key, ArrowLeft, RefreshCw, Sparkles } from 'lucide-react';
+import { X, Users, Wind, Monitor, Lightbulb, Zap, Cpu, Wrench, Lock, UserCircle, Mail, Key, ArrowLeft, RefreshCw, Sparkles, BookOpen, User, Clock } from 'lucide-react';
 import { supabaseNew } from '../../supabaseClient'; 
 import { toast } from 'sonner';
 
@@ -17,13 +17,14 @@ export interface RoomDeviceState {
 
 interface RoomConfigModalProps {
   roomName: string;
+  simTime: string;
+  activeClass?: any; // 💡 ข้อมูลวิชาเรียนที่ซิงค์มาจาก App.tsx
   initialState: RoomDeviceState;
-  simTime?: string; // 💡 รับค่าเวลาจำลองมาด้วยเพื่อคำนวณอุณหภูมิข้างนอก
-  onSave: (roomName: string, newState: RoomDeviceState, calculatedPower: number) => void;
+  onSave: (roomName: string, state: RoomDeviceState) => void;
   onClose: () => void;
 }
 
-export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onSave, onClose }: RoomConfigModalProps) {
+export function RoomConfigModal({ roomName, initialState, simTime = '08:00', activeClass, onSave, onClose }: RoomConfigModalProps) {
   const [state, setState] = useState<RoomDeviceState>({
     ...initialState,
     isLoggedIn: initialState.isLoggedIn ?? false
@@ -73,6 +74,7 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
     }
   };
 
+  // 3. ขอ OTP
   const handleRequestOTP = async () => {
     try {
       if (!supabaseNew) return;
@@ -93,11 +95,11 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
       setView('verify');
       setLoginError('');
     } catch (err: any) {
-      console.error("🔥 OTP Error Detail:", err.message || err); 
       setLoginError('ระบบขัดข้อง ไม่สามารถส่งรหัสได้ในขณะนี้');
     }
   };
 
+  // 4. ยืนยัน OTP
   const handleVerifyOTP = async () => {
     if (!supabaseNew) return;
     const { data, error } = await supabaseNew.from('otp_storage').select('*').eq('email', resetEmail).eq('code', otpInput).order('created_at', { ascending: false }).limit(1).single();
@@ -110,6 +112,7 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
     }
   };
 
+  // 5. รีเซ็ตรหัสผ่าน
   const handleResetPassword = async () => {
     if (!supabaseNew) return;
     const { error } = await supabaseNew.from('teacher_profiles').update({ password: newPassword }).eq('username', loginUser);
@@ -123,7 +126,7 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
     }
   };
 
-  // --- 🤖 6. AI Auto-Adjustment Logic ---
+  // 6. AI Auto-Adjustment Logic
   useEffect(() => {
     if (state.isAiOptimized) {
       const isPowerAuthorized = state.isLoggedIn || state.maintenanceBypass;
@@ -152,17 +155,12 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
     }
   }, [state.isAiOptimized, state.occupancy, state.isLoggedIn, state.maintenanceBypass]);
 
-  // 💡 ดึงอุณหภูมิภายนอก (เหมือนใน App.tsx เป๊ะๆ)
-  const getOutsideTemp = (time: string) => {
-    const hour = parseInt(time.split(':')[0]);
-    const temps = [25, 24, 24, 24, 25, 26, 28, 30, 32, 34, 36, 37, 38, 39, 38, 36, 34, 32, 30, 28, 27, 26, 25, 25];
-    return temps[hour] || 30;
-  };
-
-  // 💡 คำนวณพลังงานแบบ Real-time ให้ตรงกับหน้าเว็บเป๊ะๆ
+  // คำนวณพลังงานเรียลไทม์
   useEffect(() => {
     let powerW = 0;
-    const outdoorTemp = getOutsideTemp(simTime);
+    const hour = parseInt(simTime.split(':')[0]);
+    const temps = [25, 24, 24, 24, 25, 26, 28, 30, 32, 34, 36, 37, 38, 39, 38, 36, 34, 32, 30, 28, 27, 26, 25, 25];
+    const outdoorTemp = temps[hour] || 30;
     const isPowerAuthorized = state.isLoggedIn || state.maintenanceBypass;
     
     if (isPowerAuthorized) {
@@ -177,11 +175,7 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
 
       if (finalAcOn) powerW += currentAcLoad;
       if (finalLightsOn) {
-        if (state.isAiOptimized && finalProjectorOn && !state.maintenanceBypass) {
-          powerW += (108 * 0.5);
-        } else {
-          powerW += 108;
-        }
+        powerW += (state.isAiOptimized && finalProjectorOn && !state.maintenanceBypass) ? 54 : 108;
       }
       if (finalProjectorOn) powerW += 300;
       if (state.occupancy > 0) powerW += state.occupancy * 51;
@@ -193,6 +187,7 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-[#151515] border border-gray-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
         
+        {/* Header */}
         <div className="flex justify-between items-center p-5 border-b border-gray-800 bg-[#1a1a1a]">
           <div>
             <h2 className="text-xl font-bold text-white flex items-center gap-2">{roomName}</h2>
@@ -205,6 +200,46 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
         </div>
 
         <div className="p-6 space-y-5 custom-scrollbar max-h-[80vh] overflow-y-auto">
+          
+          {/* 🎯 ส่วนแสดงข้อมูลเรียลไทม์จาก Database */}
+          {activeClass ? (
+            <div className="bg-lime-500/10 border border-lime-500/30 p-4 rounded-xl">
+              <h4 className="text-lime-400 font-bold text-sm mb-3 flex items-center gap-2">
+                <Clock size={16} /> กำลังมีการเรียนการสอน
+              </h4>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="flex flex-col">
+                  <span className="text-gray-500 text-[10px] font-bold uppercase mb-1">วิชาที่สอน</span>
+                  <span className="text-white font-medium flex items-center gap-2">
+                    <BookOpen size={14} className="text-gray-400"/> {activeClass.subject.code}
+                  </span>
+                  <span className="text-gray-400 text-xs truncate" title={activeClass.subject.name}>{activeClass.subject.name}</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-gray-500 text-[10px] font-bold uppercase mb-1">ผู้สอน</span>
+                  <span className="text-white font-medium flex items-center gap-2">
+                    <User size={14} className="text-gray-400"/> {activeClass.teacher_name || 'ไม่ระบุ'}
+                  </span>
+                </div>
+                <div className="flex flex-col col-span-2 mt-1">
+                  <span className="text-gray-500 text-[10px] font-bold uppercase mb-1">จำนวนนักศึกษาตามตาราง</span>
+                  <span className="text-lime-400 font-bold text-lg flex items-center gap-2">
+                    <Users size={16} /> {activeClass.subject.students} คน
+                  </span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-gray-800/40 border border-gray-700 p-4 rounded-xl flex items-center gap-3">
+              <div className="p-2 bg-gray-800 rounded-lg"><Clock size={16} className="text-gray-400" /></div>
+              <div>
+                <h4 className="text-gray-300 font-bold text-sm uppercase tracking-tight">Available Room</h4>
+                <p className="text-gray-500 text-[10px] uppercase tracking-wider">ไม่มีตารางเรียนในเวลานี้</p>
+              </div>
+            </div>
+          )}
+
+          {/* Authentication & Bypass */}
           <div className="space-y-3">
             {!state.isLoggedIn && !state.maintenanceBypass ? (
               <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-800 space-y-4">
@@ -217,26 +252,21 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
                     <button onClick={handleLogin} className="w-full bg-lime-500 hover:bg-lime-400 text-black font-black py-2.5 rounded-lg transition-all text-xs uppercase shadow-lg shadow-lime-500/10">Authorize Room Power</button>
                   </>
                 )}
-
                 {view === 'forgot' && (
                   <>
                     <div className="text-blue-400 font-bold text-xs uppercase tracking-widest flex items-center gap-2 mb-1"><Mail size={14} /> Reset Password</div>
-                    <p className="text-[10px] text-gray-400">ระบุ Username เพื่อรับรหัส OTP ทางอีเมล</p>
                     <input type="text" placeholder="Username" value={loginUser} onChange={(e) => setLoginUser(e.target.value)} className="w-full bg-black text-white text-sm px-3 py-2.5 rounded-lg border border-gray-700 focus:border-blue-500 focus:outline-none" />
                     <button onClick={handleRequestOTP} className="w-full bg-blue-500 hover:bg-blue-400 text-white font-black py-2.5 rounded-lg transition-all text-xs uppercase">Send Verify Code</button>
                     <button onClick={() => setView('login')} className="w-full text-[10px] text-gray-500 font-bold uppercase flex items-center justify-center gap-1"><ArrowLeft size={10}/> กลับหน้าล็อกอิน</button>
                   </>
                 )}
-
                 {view === 'verify' && (
                   <>
                     <div className="text-orange-400 font-bold text-xs uppercase tracking-widest flex items-center gap-2 mb-1"><Key size={14} /> Verification</div>
-                    <p className="text-[10px] text-gray-400">รหัสถูกส่งไปที่: {resetEmail}</p>
                     <input type="text" placeholder="เลข 6 หลัก" maxLength={6} value={otpInput} onChange={(e) => setOtpInput(e.target.value)} className="w-full bg-black text-white text-center text-xl font-mono py-2 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none tracking-[0.5em]" />
                     <button onClick={handleVerifyOTP} className="w-full bg-orange-500 hover:bg-orange-400 text-white font-black py-2.5 rounded-lg transition-all text-xs uppercase">Verify Code</button>
                   </>
                 )}
-
                 {view === 'reset' && (
                   <>
                     <div className="text-purple-400 font-bold text-xs uppercase tracking-widest flex items-center gap-2 mb-1"><RefreshCw size={14} /> New Password</div>
@@ -244,7 +274,6 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
                     <button onClick={handleResetPassword} className="w-full bg-purple-500 hover:bg-purple-400 text-white font-black py-2.5 rounded-lg transition-all text-xs uppercase">Update Password</button>
                   </>
                 )}
-
                 {loginError && <p className="text-red-400 text-[10px] font-bold text-center animate-pulse">{loginError}</p>}
               </div>
             ) : (
@@ -262,31 +291,30 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
             <button onClick={() => setState({...state, maintenanceBypass: !state.maintenanceBypass})} className={`flex items-center justify-between p-3 rounded-xl border w-full transition-all ${state.maintenanceBypass ? 'border-orange-500 bg-orange-500/10 text-orange-400 shadow-[0_0_10px_rgba(249,115,22,0.1)]' : 'border-gray-800 text-gray-500'}`}><div className="flex items-center gap-2 text-xs font-bold uppercase"><Wrench size={18} /> Bypass Mode</div><span className="text-[10px] font-black">{state.maintenanceBypass ? 'ACTIVE' : 'OFF'}</span></button>
           </div>
 
+          {/* AI Mode Toggle */}
           <div className={`flex items-center justify-between p-4 rounded-xl border transition-all ${state.isAiOptimized ? 'border-lime-500/30 bg-lime-500/5' : 'border-gray-800 opacity-60'}`}>
             <div className="flex items-center gap-3">
               <div className={`p-2 rounded-lg ${state.isAiOptimized ? 'bg-lime-500/20 text-lime-400' : 'bg-gray-800 text-gray-500'}`}>
                 <Cpu size={20} />
               </div>
               <div>
-                <div className="text-white text-sm font-bold flex items-center gap-2">
-                  System Mode: {state.isAiOptimized ? 'AUTO' : 'MANUAL'}
-                </div>
-                <div className="text-gray-500 text-[10px] uppercase tracking-wider">
-                  {state.isAiOptimized ? 'AI Manages Temp. Lights/Proj Always ON' : 'Teacher Configures Devices'}
-                </div>
+                <div className="text-white text-sm font-bold uppercase tracking-tight">System Mode: {state.isAiOptimized ? 'AUTO' : 'MANUAL'}</div>
+                <div className="text-gray-500 text-[9px] uppercase tracking-wider">{state.isAiOptimized ? 'AI Manages Temp/Lights Always ON' : 'Teacher Configures Devices'}</div>
               </div>
             </div>
             <input type="checkbox" checked={state.isAiOptimized} onChange={(e) => setState({...state, isAiOptimized: e.target.checked})} className="accent-lime-500 w-5 h-5 cursor-pointer" />
           </div>
 
+          {/* Occupancy Slider */}
           <div className="bg-white/5 p-4 rounded-xl border border-white/5 space-y-3">
             <div className="flex justify-between text-[10px] font-black uppercase tracking-wider text-gray-400">
-              <span>Room Occupancy</span>
-              <span className="text-lime-400 font-mono text-xs">{state.occupancy} / 40</span>
+              <span>Room Occupancy (Simulation)</span>
+              <span className="text-lime-400 font-mono text-xs">{state.occupancy} / 60</span>
             </div>
-            <input type="range" min="0" max="40" value={state.occupancy} onChange={(e) => setState({...state, occupancy: parseInt(e.target.value)})} className="w-full accent-lime-500 h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer" />
+            <input type="range" min="0" max="60" value={state.occupancy} onChange={(e) => setState({...state, occupancy: parseInt(e.target.value)})} className="w-full accent-lime-500 h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer" />
           </div>
 
+          {/* Device Controls */}
           <div className="grid grid-cols-2 gap-4">
             <div className={`p-4 rounded-xl border bg-white/5 border-white/5 space-y-4 transition-all ${(!state.isLoggedIn && !state.maintenanceBypass) ? 'opacity-20 grayscale cursor-not-allowed' : 'opacity-100'}`}>
               <div className="flex justify-between items-center">
@@ -314,9 +342,10 @@ export function RoomConfigModal({ roomName, initialState, simTime = '08:00', onS
           </div>
         </div>
 
+        {/* Footer */}
         <div className="p-5 border-t border-gray-800 bg-[#1a1a1a] flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-[10px] font-black text-gray-500 uppercase hover:text-white transition-colors">Cancel</button>
-          <button onClick={() => onSave(roomName, state, roomPowerKw)} className="px-6 py-2 rounded-xl text-[10px] font-black bg-lime-500 text-black uppercase shadow-lg shadow-lime-500/20 hover:bg-lime-400 active:scale-95 transition-all">Save Changes</button>
+          <button onClick={() => onSave(roomName, state)} className="px-6 py-2 rounded-xl text-[10px] font-black bg-lime-500 text-black uppercase shadow-lg shadow-lime-500/20 hover:bg-lime-400 active:scale-95 transition-all">Save Changes</button>
         </div>
       </div>
     </div>

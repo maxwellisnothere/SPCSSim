@@ -13,6 +13,7 @@ import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { NotificationHub } from './components/NotificationHub'; 
 import { supabaseNew } from '../supabaseClient'; 
 
+// 💡 ข้อมูล Mapping อาจารย์ตามรหัสวิชา
 const TEACHER_MAPPING: Record<string, { name: string; teacher: string }> = {
   'CPE201': { name: 'Programming Fundamentals', teacher: 'อ.สมชาย' },
   'CPE495': { name: 'Senior Project', teacher: 'อ.สมชาย' },
@@ -37,6 +38,23 @@ const ALL_SIMULATION_ROOMS = [
   ...AVAILABLE_CLASSROOMS
 ];
 
+// 💡 ฟังก์ชันเช็คว่าเวลาจำลองอยู่ในช่วงเวลาเรียนหรือไม่
+export const checkIsClassActive = (simTimeStr: string, classTimeStr: string) => {
+  try {
+    if (!classTimeStr || !simTimeStr) return false;
+    const simH = parseInt(simTimeStr.split(':')[0]);
+    if (classTimeStr.includes('-')) {
+      const [start, end] = classTimeStr.split('-');
+      const startH = parseInt(start.trim().split(':')[0]);
+      const endH = parseInt(end.trim().split(':')[0]);
+      return simH >= startH && simH < endH;
+    }
+    return simH === parseInt(classTimeStr.split(':')[0]);
+  } catch (e) {
+    return false;
+  }
+};
+
 export default function App() {
   const [activeMenu, setActiveMenu] = useState('overview'); 
   const [selectedFloor, setSelectedFloor] = useState<'floor1' | 'floor2' | 'floor3'>('floor1');
@@ -45,10 +63,7 @@ export default function App() {
   const [meetingRooms, setMeetingRooms] = useState<any[]>([]);
   const [editingRoom, setEditingRoom] = useState<string | null>(null);
 
-  // 💡 [SOLVED] ให้ App.tsx อ่านค่าวัน-เวลาจาก localStorage ตั้งแต่ตอนเริ่มโหลดหน้าเว็บครับ!
-  const [simDay, setSimDay] = useState<string>(() => {
-    return localStorage.getItem('pham_sim_day') || 'Monday';
-  });
+  const [simDay, setSimDay] = useState<string>(() => localStorage.getItem('pham_sim_day') || 'Monday');
   const [simTime, setSimTime] = useState<string>(() => {
     const savedMinutes = localStorage.getItem('pham_sim_minutes');
     if (savedMinutes) {
@@ -60,12 +75,8 @@ export default function App() {
     return '08:00';
   });
   
-  const [currentWeather, setCurrentWeather] = useState<'sunny' | 'heatwave' | 'rainy'>(() => {
-    return (localStorage.getItem('pham_sim_weather') as any) || 'sunny';
-  });
-  const [isRandomOccupancy, setIsRandomOccupancy] = useState<boolean>(() => {
-    return localStorage.getItem('pham_sim_random') === 'true';
-  });
+  const [currentWeather, setCurrentWeather] = useState<'sunny' | 'heatwave' | 'rainy'>(() => (localStorage.getItem('pham_sim_weather') as any) || 'sunny');
+  const [isRandomOccupancy, setIsRandomOccupancy] = useState<boolean>(() => localStorage.getItem('pham_sim_random') === 'true');
 
   const [anomalies, setAnomalies] = useState<string[]>([]); 
   const [simEvents, setSimEvents] = useState<string[]>([]);
@@ -94,17 +105,12 @@ export default function App() {
     }
   });
 
+  // 💡 [Sync DB] ส่งเวลาไปให้ Streamlit
   const syncSimTimeToDatabase = async (day: string, time: string) => {
     if (!supabaseNew) return;
     try {
-      const { error } = await supabaseNew
-        .from('simulation_status')
-        .update({ sim_day: day, sim_time: time, updated_at: new Date().toISOString() })
-        .eq('id', 1);
-      if (error) console.error('Error syncing simulation time:', error);
-    } catch (e) {
-      console.error('Exception syncing simulation time:', e);
-    }
+      await supabaseNew.from('simulation_status').update({ sim_day: day, sim_time: time, updated_at: new Date().toISOString() }).eq('id', 1);
+    } catch (e) { console.error("Sync Time Error:", e); }
   };
 
   const getOutsideTemp = (time: string) => {
@@ -127,17 +133,19 @@ export default function App() {
     return Math.max(acOn ? acSetpoint - 0.5 : 18, Math.min(nextTemp, outdoorTemp + 2));
   };
 
+  // 💡 [Core Logic] คำนวณพลังงาน (ใช้ค่าจาก AI ที่เทรนได้)
   const calculateLivePower = (currentDay: string, currentTime: string) => {
     let totalOptimizedW = 0; let totalBaselineW = 0;
-    const currentHour = currentTime.split(':')[0];
-    const outdoorTemp = getOutsideTemp(currentTime);
     const roomLogs: any[] = [];
     const newRoomTemps: Record<string, number> = { ...roomTemps };
+    const outdoorTemp = getOutsideTemp(currentTime);
+    const currentHour = currentTime.split(':')[0];
 
-    totalOptimizedW += 3000; totalBaselineW += 3000;
+    totalOptimizedW += 1500; totalBaselineW += 1500; // System Base Load
 
     ALL_SIMULATION_ROOMS.forEach(roomName => {
-      const activeClass = masterSchedule.find(s => s.room === roomName && s.day === currentDay && s.time.split(':')[0] === currentHour);
+      const activeClass = masterSchedule.find(s => s.room === roomName && s.day === currentDay && checkIsClassActive(currentTime, s.time));
+      
       let isMeetingBooked = false;
       if (roomName.includes('Meeting')) {
         const mRoom = meetingRooms.find(r => r.name === roomName);
@@ -146,12 +154,13 @@ export default function App() {
 
       const is247 = roomName === 'Cafe' || roomName === 'Lounge';
       const config = roomsConfig[roomName] || {} as Partial<RoomDeviceState>;
+      
       let defOcc = 0;
       if (activeClass) defOcc = activeClass.subject.students;
       else if (isMeetingBooked) defOcc = 5; 
       else if (is247) defOcc = (parseInt(currentHour) >= 7 && parseInt(currentHour) <= 20) ? (roomName === 'Cafe' ? 30 : 15) : (roomName === 'Cafe' ? 5 : 2);
 
-      const occupancy = isRandomOccupancy ? Math.floor(Math.random() * (roomName.includes('Cafe') ? 61 : 46)) : (config.occupancy ?? defOcc);
+      let occupancy = isRandomOccupancy ? (Math.random() < 0.1 ? 0 : Math.floor(Math.random() * (defOcc + 10))) : (config.occupancy ?? defOcc);
       const isAiOptimized = config.isAiOptimized ?? true;
       let acIntent = config.acOn ?? (!!activeClass || isMeetingBooked || is247);
       let lightsIntent = config.lightsOn ?? (!!activeClass || isMeetingBooked || is247);
@@ -180,14 +189,27 @@ export default function App() {
       const nextTemp = calculateNextRoomTemp(roomName, currentRoomTemp, outdoorTemp, finalAc, acTemp, occupancy, currentAcLoad, maxAcPower);
       newRoomTemps[roomName] = nextTemp;
 
-      let optW = finalAc ? currentAcLoad : 0;
-      if (finalLights) optW += (isAiOptimized && finalProj && !is247) ? (roomName.includes('Cafe') ? 300 : 108) * 0.5 : (roomName.includes('Cafe') ? 300 : 108);
+      // 🎯 [AI Calculation] ใช้ค่าน้ำหนักจาก Colab (R2: 0.966)
+      // 📈 Occupancy: 239.20W | Indoor: 77.02W | Setpoint: 112.43W
+      let optW = 0;
+      if (finalAc) {
+  // 🎯 ใช้สมการ AI เต็มรูปแบบจาก Colab
+  const aiPower = (occupancy * 239.20) + 
+                  (outdoorTemp * -13.68) + 
+                  (nextTemp * 77.02) + 
+                  (acTemp * 112.43) + 
+                  (-4871.19); // 👈 ใส่ Intercept ตรงนี้
+
+  // ปรับ scale ให้เข้ากับความจริง (ถ้าเลขเยอะไปปรับตัวคูณด้านล่างได้)
+  optW = Math.max(0, aiPower * 0.5); 
+}
+      
+      if (finalLights) optW += (isAiOptimized && finalProj && !is247) ? 54 : 108;
       if (finalProj && !is247) optW += 300;
-      if (occupancy > 0) optW += occupancy * 51;
 
-      let baseW = (activeClass || isMeetingBooked || is247 || occupancy > 0 || acIntent) ? (maxAcPower + (is247 ? 300 : 108) + (is247 ? 0 : 300) + (occupancy * 51)) : 0;
+      // Baseline Calculation (แบบเก่า/ไม่ประหยัด)
+      let baseW = (activeClass || isMeetingBooked || is247 || occupancy > 0) ? (maxAcPower + 108 + 300 + (occupancy * 51)) : 0;
 
-      optW += (Math.random() * 60 - 30); baseW += (Math.random() * 60 - 30);
       totalOptimizedW += Math.max(0, optW); totalBaselineW += Math.max(0, baseW);
 
       roomLogs.push({
@@ -202,10 +224,9 @@ export default function App() {
   };
 
   const handleSimulationData = async (data: any) => {
-    setSimDay(data.day); 
-    setSimTime(data.timeFormatted); 
-    setSimEvents(data.events);
+    setSimDay(data.day); setSimTime(data.timeFormatted); setSimEvents(data.events);
     
+    // Sync เวลาลง DB
     syncSimTimeToDatabase(data.day, data.timeFormatted);
 
     if (data.weather) setCurrentWeather(data.weather);
@@ -222,28 +243,27 @@ export default function App() {
           }
         }
       }
-      loggedAnomalies.current.forEach(room => { if (!data.anomalies.includes(room)) loggedAnomalies.current.delete(room); });
     }
 
     const { optimizedKw, baselineKw, roomLogs, newRoomTemps } = calculateLivePower(data.day, data.timeFormatted);
     setRoomTemps(newRoomTemps);
 
-    const randomF = optimizedKw > 0 ? (Math.random() * 0.4) - 0.2 : 0;
-    const finalOpt = Math.max(0, optimizedKw + randomF);
-    const finalBase = Math.max(0, baselinePower + randomF + 0.3); 
-    const savingsKw = Math.max(0, finalBase - finalOpt);
+    const finalOpt = Math.max(0, optimizedKw);
+    const finalBase = Math.max(finalOpt, baselineKw); 
+    const savingsKw = finalBase - finalOpt;
     const savingsPct = finalBase > 0 ? (savingsKw / finalBase) * 100 : 0;
 
     setCurrentPower(finalOpt); setBaselinePower(finalBase); setSavingsPercent(savingsPct);
-    setPowerHistory(prev => [...prev.slice(1), finalBase]); setOptHistory(prev => [...prev.slice(1), finalOpt]); setSavingsHistory(prev => [...prev.slice(1), savingsPct]);
+    setPowerHistory(prev => [...prev.slice(1), finalBase]); 
+    setOptHistory(prev => [...prev.slice(1), finalOpt]); 
+    setSavingsHistory(prev => [...prev.slice(1), savingsPct]);
 
     if (data.timeFormatted !== lastLoggedTime.current) {
       lastLoggedTime.current = data.timeFormatted;
       const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      
       if (supabaseNew) {
         try {
-          const currentClass = masterSchedule.find(s => s.day === data.day && s.time.split(':')[0] === data.timeFormatted.split(':')[0]);
+          const currentClass = masterSchedule.find(s => s.day === data.day && checkIsClassActive(data.timeFormatted, s.time));
           await supabaseNew.from('energy_logs').insert([{
             timestamp: ts, energy_baseline: Math.round(finalBase * 1000), energy_ai: Math.round(finalOpt * 1000),
             energy_saved_w: Math.round(savingsKw * 1000), energy_saved_pct: parseFloat(savingsPct.toFixed(2)),
@@ -258,10 +278,8 @@ export default function App() {
 
   const handleUpdateSchedule = async (newSchedule: TimeSlot[]) => {
     const enhancedSchedule = newSchedule.map(slot => ({
-      ...slot,
-      teacher_name: TEACHER_MAPPING[slot.subject.code]?.teacher || 'ไม่ระบุชื่ออาจารย์'
+      ...slot, teacher_name: TEACHER_MAPPING[slot.subject.code]?.teacher || 'ไม่ระบุชื่ออาจารย์'
     }));
-
     setMasterSchedule(enhancedSchedule);
     if (!supabaseNew) return;
     try {
@@ -277,6 +295,7 @@ export default function App() {
     setRoomsConfig(prev => ({ ...prev, [roomName]: newState })); setEditingRoom(null);
   };
 
+  // Lifecycle
   useEffect(() => {
     const fetchS = async () => {
       if (!supabaseNew) return;
@@ -293,7 +312,6 @@ export default function App() {
   useEffect(() => {
     const { optimizedKw, baselineKw, roomLogs } = calculateLivePower(simDay, simTime);
     setCurrentPower(optimizedKw); setBaselinePower(baselineKw); setLiveRoomData(roomLogs);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomsConfig, masterSchedule, simTime, simDay, anomalies, currentWeather, isRandomOccupancy]); 
 
   const summaryData = [
@@ -301,6 +319,8 @@ export default function App() {
     { title: 'Baseline Power', value: baselinePower.toFixed(1), unit: 'kW', sparklineData: powerHistory },
     { title: 'Optimized Power', value: currentPower.toFixed(1), unit: 'kW', sparklineData: optHistory }
   ];
+
+  const currentModalClass = editingRoom ? masterSchedule.find(s => s.room === editingRoom && s.day === simDay && checkIsClassActive(simTime, s.time)) : undefined;
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] flex font-sans text-gray-100 selection:bg-lime-500/30">
@@ -360,7 +380,16 @@ export default function App() {
         )}
       </div>
       {showScheduleModal && ( <ScheduleModal schedule={masterSchedule} availableRooms={AVAILABLE_CLASSROOMS} onUpdateSchedule={handleUpdateSchedule} onClose={() => setShowScheduleModal(false)} /> )}
-      {editingRoom && ( <RoomConfigModal roomName={editingRoom} simTime={simTime} initialState={roomsConfig[editingRoom] || { occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, isAiOptimized: true, isLoggedIn: false, maintenanceBypass: false, authorizedUser: '' }} onSave={handleSaveRoomConfig} onClose={() => setEditingRoom(null)} /> )}
+      {editingRoom && ( 
+        <RoomConfigModal 
+          roomName={editingRoom} 
+          simTime={simTime} 
+          activeClass={currentModalClass} 
+          initialState={roomsConfig[editingRoom] || { occupancy: 0, acOn: false, acTemp: 25, projectorOn: false, lightsOn: false, isAiOptimized: true, isLoggedIn: false, maintenanceBypass: false, authorizedUser: '' }} 
+          onSave={handleSaveRoomConfig} 
+          onClose={() => setEditingRoom(null)} 
+        /> 
+      )}
     </div>
   );
 }
